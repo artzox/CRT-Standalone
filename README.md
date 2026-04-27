@@ -76,11 +76,56 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 Softens the source image before it enters the CRT simulation pipeline. At `PREBLUR_RESOLUTION=1` it also functions as a mild AA pass. Increase H/V sigma for stronger softening. Keep radius low (2–3) for performance.
 
 ### Shadow Mask
+
 Controls the phosphor pattern simulation.
 
-- **Mask Type** — choose between shadow mask, aperture grille, slot mask variants
-- **Mask Strength** — how visible the pattern is. 0.3–0.6 is typical
-- **Mask Boost** — brightens the lit areas of the mask to compensate for the darkening effect
+**Mask Type** — six options:
+
+| # | Name | Description |
+|---|---|---|
+| 0 | Aperture Grille | Standard vertical RGB stripe pattern. Mimics Sony Trinitron/Mitsubishi Diamondtron tubes. Clean horizontal structure, high brightness |
+| 1 | Diagonal Aperture Grille | Same as Aperture Grille but each row is offset by half a triad width. Distributes the phosphor structure diagonally — reduces moiré and interference with QD-OLED triangular subpixel layouts |
+| 2 | Slot Mask | Aperture grille plus alternating dark horizontal rows, simulating the slots between phosphor rows in shadow mask CRTs. Adds a two-dimensional structure — more "CRT" looking than pure aperture grille at the cost of brightness |
+| 3 | Trinitron | Wider green phosphor stripe (~50% of triad width), narrower R/B. Matches real Sony Trinitron phosphor proportions where green was physically larger. Sharper edges than standard aperture grille |
+| 4 | QD-OLED Delta | Simulates the physical triangular subpixel layout of QD-OLED panels (A95L and similar). Green phosphors at corners, red and blue alternating. Designed for 1:1 pixel mapping — see QD-OLED guide below |
+| 5 | QD-OLED Luma Gate | Same subpixel pattern as QD-OLED Delta but with luminance-weighted mask application. Dark pixels receive full mask structure; bright pixels gradually pass through unmasked. Matches real CRT phosphor behaviour where bright areas bleed light that fills adjacent gaps |
+
+**Common mask settings:**
+
+- **Triad Width** — size of one RGB triad in pixels at 4K reference resolution. 1.0 = very fine, 3.0+ = visible pixel structure. For QD-OLED at native 1:1 mapping, use 2.0
+- **Mask Strength** — how strongly the mask darkens non-phosphor areas. 0.3–0.6 typical for CRT feel. See QD-OLED Luma Gate guide for calibration workflow
+- **Mask Boost** — compensates for brightness loss by brightening lit phosphor areas. Raise alongside Mask Strength to maintain overall luminance
+- **Phosphor Sharpness** — edge softness of individual phosphor cells. Higher = harder edges
+- **Slot Mask Row Darkness** — only for type 2. Controls how dark the slot rows are. 0 = no slots, 1 = fully black rows
+- **QD-OLED Mask Offset X/Y** — fine-tune the subpixel pattern alignment in pixels. Adjust if the mask tiles don't align correctly with your panel's physical subpixel layout
+
+---
+
+#### QD-OLED Mask Guide
+
+QD-OLED panels have a triangular RGB subpixel layout rather than the standard vertical stripe arrangement. The QD-OLED Delta and QD-OLED Luma Gate mask types are designed to match this physical structure.
+
+**Critical: 1:1 pixel mapping required**
+
+For the mask to accurately represent the physical subpixel layout, the game must render at your display's native resolution with no supersampling or DSR. The triad pattern must map one virtual phosphor cell to one physical display pixel.
+
+Set **Triad Width = 2.0** for native 1:1 mapping. This is the minimum value where each cell in the shader's 2×2 tile pattern corresponds to a single physical pixel. Values above 2.0 (4.0, 6.0) scale up the pattern — useful for lower resolutions or to make the structure more visible, but no longer 1:1 with the physical panel.
+
+If you can see the mask pattern clearly without any pixel grid effect, you are likely not at 1:1. At true 1:1 the mask is subtle and integrates with the image rather than sitting on top of it.
+
+---
+
+#### QD-OLED Luma Gate Calibration Workflow
+
+The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through cleanly while dark areas receive the full phosphor texture. This requires calibration to ensure highlights look correct before dialling back mask strength.
+
+**Calibration steps:**
+
+1. Set **Mask Strength to 1.0** (maximum). This gives you full visibility of the mask effect across all luminance levels
+2. Navigate in the game to a scene with the **brightest highlights** you expect to encounter — direct sunlight, light sources, blown-out sky
+3. Adjust the **Mask Boost** and **Phosphor Sharpness** sliders until the bright highlights look correct — they should appear clean and bright with minimal visible phosphor structure. The luma gate automatically reduces the mask on these pixels; your task here is to ensure the gate threshold is well placed
+4. Check dark and midtone areas — they should show clear phosphor texture. If they look too dark, raise Mask Boost. If the texture is too harsh, lower Phosphor Sharpness
+5. Once you are satisfied with how the image looks at Mask Strength 1.0, **set Mask Strength back to your preferred value** (typically 0.4–0.7). The calibration you did at full strength defines the character of the effect; reducing strength scales it proportionally without changing the highlight behaviour
 
 ### Scanlines
 - **Scanline Strength** — depth of dark scanlines between phosphor rows
@@ -137,11 +182,88 @@ Edge darkening.
 - **Shadows** — minimum grain level in shadow areas
 - **Grain Size** — diffusion spread of grain clusters. 0.2 = fine (default). Higher = larger organic clumps
 
-### Sharpen
-CAS (Contrast Adaptive Sharpening).
+### Gamma & Contrast
 
-- **Strength** — how strongly detail is recovered
-- **Clamp** — prevents haloing on hard edges. Lower = safer
+- **CRT Gamma (Input)** — gamma of the source signal. 2.4 = standard sRGB
+- **Display Gamma (Output)** — target display gamma. 2.2 = typical LCD
+- **Brightness** — global exposure offset
+- **Contrast** — expands or compresses the luminance range
+- **Saturation** — colour saturation adjustment
+- **Colour Temperature** — warm/cool white point shift
+
+### Phosphor Profile
+
+Simulates the colour response of real CRT phosphor types (P22, EBU, etc.).
+
+- **Phosphor Profile** — choose a phosphor type to apply its colour primaries
+- **Correction Strength** — how strongly the phosphor colour matrix is applied
+- **Phosphor Sharpness** — spatial sharpness of the phosphor dot pattern
+- **Display Gamut** — target display colour space for the output transform
+- **Phosphor Colour Temperature** — white point of the simulated phosphor
+
+### Edge Blur
+
+Simulates CRT aperture falloff — soft darkening and blurring toward screen edges, independent of vignette.
+
+- **Edge Blur Strength** — intensity of the edge blur effect
+- **Edge Blur Max Radius** — maximum blur radius at the screen corners (pixels)
+- **Edge Blur Falloff** — how quickly the blur builds from centre to edge. Higher = more concentrated at edges
+
+### Post-Scanline Softening (Scanline Persistence)
+
+A subtle vertical softening pass applied after scanlines, which reduces the harsh aliasing that can appear at scanline edges, particularly with curved geometry. Controlled by `ENABLE_SCANLINE_SOFTEN`.
+
+- **Scanline Soften Strength** — how much vertical blending is applied between scanline rows. 0 = off, 0.5–0.8 = natural CRT persistence feel
+
+### Sharpen
+CAS (Contrast Adaptive Sharpening). Restores fine detail softened by pre-blur and the mask passes.
+
+- **Strength** — how strongly detail is recovered. 0.3–0.5 is typical
+- **Clamp** — prevents haloing on hard edges. Lower = safer, less risk of ringing
+
+### Motion Sharpening
+
+Requires `ENABLE_MOTION_SHARPEN=1`. A separate CAS sharpening pass that uses the frame-to-frame difference as a motion mask — stronger sharpening is applied to moving regions, static areas receive little or none. Complements BFI by counteracting sample-and-hold blur on moving objects.
+
+- **Motion Sharpen Strength** — overall amplitude. 0.3–0.5 = subtle, 1.0 = strong
+- **Motion Threshold** — minimum luma change to count as motion. Raise if grain triggers false sharpening
+- **Motion Sharpen Clamp** — prevents haloing, same role as in the main CAS pass
+
+Requires `ENABLE_DECAY=1` for the motion reference frame. Without decay, sharpening is applied uniformly.
+
+### Phosphor Persistence
+
+Requires `ENABLE_PERSISTENCE=1`. Simulates slow phosphor fade — each frame blends slightly with a stored version of the previous frame, creating a subtle trailing afterimage on moving objects.
+
+- **Persistence Strength** — how much of the previous frame bleeds into the current
+- **Persistence Decay Distance** — spatial gaussian decay radius of the stored frame
+
+### Anti Burn-In
+
+Two independent systems to prevent static image burn-in during extended play.
+
+- **Phase Shift** — slowly drifts the image position in a sinusoidal pattern. **Period** controls cycle duration (minutes), **Amplitude** controls maximum displacement (pixels)
+- **Orbit** — slow circular drift. **Orbit Period** controls cycle duration, **Orbit Radius** controls displacement radius
+
+Both are subtle enough to be imperceptible during normal play.
+
+### Geometry
+
+Requires `ENABLE_GEOMETRY=1`. Screen curvature and zoom simulation.
+
+- **Geometry Mode** — curvature type (off, spherical, cylindrical)
+- **Curvature Strength** — how strongly the image is warped
+- **Zoom** — compensates for the zoom-out effect of curvature
+
+Note: geometry is implemented as UV remapping in the main CRT pass, not as a post-process warp. Vignette does not follow the curved boundary.
+
+### Pipeline (Soop HDR Integration)
+
+Only relevant when using the Soop HDR framework (`PIPELINE=1` or `PIPELINE=2`).
+
+- **Display Peak Brightness (nits)** — peak luminance of your HDR display
+- **Shadow Gamma** — gamma of the Reinhard compression shadow region
+- **HDR10 Peak Brightness** — for PIPELINE=2 (HDR10 PQ encoding)
 
 ---
 

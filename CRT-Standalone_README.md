@@ -318,4 +318,5 @@ Hardware BFI (ULMB, LightBoost) addresses this by boosting the backlight intensi
 - Variable MPRT: Blur Busters algorithm (Mark Rejhon, Timothy Lottes — MIT licence)
 - CAS sharpening: AMD Contrast Adaptive Sharpening
 - Film grain: Poisson variance approach inspired by METEOR (Marty McModding)
+- Soop HDR sandwich integration: Soop framework
 - Halation, scanlines, mask: original implementation

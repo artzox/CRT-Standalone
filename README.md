@@ -92,7 +92,7 @@ Controls the phosphor pattern simulation.
 
 **Common mask settings:**
 
-- **Triad Width** — size of one RGB triad in pixels at 4K reference resolution. 1.0 = very fine, 3.0+ = visible pixel structure. For QD-OLED at native 1:1 mapping, use 2.0
+- **Triad Width** — size of one RGB triad in pixels at 4K reference resolution. 1.0 = very fine, 3.0+ = visible pixel structure. For QD-OLED at native 1:1 mapping, use 1.0 for 4k, 1.5 for 5k
 - **Mask Strength** — how strongly the mask darkens non-phosphor areas. 0.3–0.6 typical for CRT feel. See QD-OLED Luma Gate guide for calibration workflow
 - **Mask Boost** — compensates for brightness loss by brightening lit phosphor areas. Raise alongside Mask Strength to maintain overall luminance
 - **Phosphor Sharpness** — edge softness of individual phosphor cells. Higher = harder edges

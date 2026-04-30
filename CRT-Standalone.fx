@@ -334,6 +334,34 @@ uniform float crt_msharpen_clamp <
 // ============================================================
 
 #if ENABLE_PERSISTENCE
+uniform float crt_persistence_r <
+    ui_type = "drag"; ui_label = "Persistence R";
+    ui_category = "Phosphor Persistence";
+    ui_tooltip = "Persistence strength for the red channel.\n"
+                 "Real P22 phosphors decay at different rates per colour:\n"
+                 "Green persists longest, red intermediate, blue fastest.\n"
+                 "Set all three equal for uniform decay (original behaviour).";
+    ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_persistence_g <
+    ui_type = "drag"; ui_label = "Persistence G";
+    ui_category = "Phosphor Persistence";
+    ui_tooltip = "Persistence strength for the green channel.\n"
+                 "Green phosphors have the longest decay time (~2-3ms on P22).\n"
+                 "Set higher than R and B for authentic phosphor physics.";
+    ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_persistence_b <
+    ui_type = "drag"; ui_label = "Persistence B";
+    ui_category = "Phosphor Persistence";
+    ui_tooltip = "Persistence strength for the blue channel.\n"
+                 "Blue phosphors have the fastest decay (~0.5ms on P22).\n"
+                 "Set lower than R and G for authentic phosphor physics.";
+    ui_min = 0.0; ui_max = 0.99; ui_step = 0.01;
+> = 0.0;
+
 uniform float crt_persistence_strength <
     ui_type = "drag"; ui_label = "Persistence Strength";
     ui_category = "Phosphor Persistence";
@@ -439,6 +467,23 @@ uniform float crt_luma_gate_curve <
     ui_min = 0.1; ui_max = 3.0; ui_step = 0.05;
 > = 0.5;
 
+uniform float crt_mask_dither <
+    ui_type = "drag"; ui_label = "Mask Moiré Dither";
+    ui_category = "Mask";
+    ui_tooltip = "Adds a small random sub-pixel phase offset to the mask pattern\n"
+                 "within each 16x16 tile, breaking the strict periodicity that\n"
+                 "causes moiré interference with certain image frequencies.\n"
+                 "\n"
+                 "0.0 = no dither (original behaviour).\n"
+                 "0.5 = subtle randomisation, moiré noticeably reduced.\n"
+                 "1.0 = maximum dither -- may slightly soften mask edges at\n"
+                 "      non-integer triad widths.\n"
+                 "\n"
+                 "Based on Haeberli and Segal (1990) display simulation work on\n"
+                 "breaking periodic structure in CRT shadow mask emulation.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 0.0;
+
 uniform int crt_mask_offset_x <
     ui_type = "drag"; ui_label = "QD-OLED Mask Offset X (pixels)";
     ui_category = "Mask";
@@ -519,6 +564,22 @@ uniform float crt_b_scanline_attack <
     ui_category = "Scanlines";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
+
+uniform float crt_beam_h_bloom <
+    ui_type = "drag"; ui_label = "Beam Horizontal Bloom";
+    ui_category = "Scanlines";
+    ui_tooltip = "Simulates electron beam horizontal spreading on bright scanlines.\n"
+                 "On real CRTs, very bright content causes space charge effects that\n"
+                 "widen the beam horizontally as well as vertically -- saturated whites\n"
+                 "appear slightly smeared sideways, softening hard horizontal edges.\n"
+                 "\n"
+                 "0.0 = disabled (default).\n"
+                 "0.3-0.5 = subtle bloom on bright elements only.\n"
+                 "1.0 = strong horizontal softening on anything above threshold.\n"
+                 "\n"
+                 "Only applies to pixels above ~80% luma -- darker areas unaffected.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 0.0;
 
 uniform float crt_beam_min_sigma <
     ui_type = "drag"; ui_label = "Beam Sigma (Dark pixels)";
@@ -738,6 +799,52 @@ uniform float crt_glow_sigma <
     ui_min = 0.1; ui_max = 4.0; ui_step = 0.05;
 > = 1.2;
 
+uniform float crt_glow_wide_strength <
+    ui_type = "drag"; ui_label = "Wide Glow Strength";
+    ui_category = "Brightness & Glow";
+    ui_tooltip = "Dual-scale bloom: a second, much wider glow pass that creates\n"
+                 "a broad soft halo over large bright areas (sky, windows, surfaces).\n"
+                 "Complements the tight glow which handles small bright elements.\n"
+                 "\n"
+                 "0.0 = disabled (default). 0.1-0.3 = subtle area bloom.\n"
+                 "0.5+ = strong area fill, good for bright outdoor scenes.\n"
+                 "\n"
+                 "Runs at quarter resolution -- very cheap additional pass.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_glow_wide_radius <
+    ui_type = "drag"; ui_label = "Wide Glow Radius";
+    ui_category = "Brightness & Glow";
+    ui_tooltip = "Radius of the wide bloom pass in pixels at half-resolution.\n"
+                 "Higher = larger soft area halo. Keep well above tight glow radius.";
+    ui_min = 1.0; ui_max = 16.0; ui_step = 0.5;
+> = 8.0;
+
+uniform float crt_glow_wide_threshold <
+    ui_type = "drag"; ui_label = "Wide Glow Threshold";
+    ui_category = "Brightness & Glow";
+    ui_tooltip = "Luminance threshold for the wide bloom pass.\n"
+                 "Typically set lower than tight glow threshold so the wide pass\n"
+                 "captures more of the scene rather than just peak highlights.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_glow_spectral <
+    ui_type = "drag"; ui_label = "Spectral Bloom";
+    ui_category = "Brightness & Glow";
+    ui_tooltip = "Physically based chromatic bloom: blue light diffracts more\n"
+                 "than red through a lens, so the blue channel blooms wider.\n"
+                 "\n"
+                 "0.0 = uniform bloom, all channels same width (default).\n"
+                 "0.5 = subtle coloured fringe on bright elements.\n"
+                 "1.0 = full separation: R=0.75x, G=1.0x, B=1.35x sigma.\n"
+                 "\n"
+                 "Based on wavelength-dependent diffraction -- shorter wavelengths\n"
+                 "spread more than longer ones through optical glass.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 0.0;
+
 uniform float crt_glow_threshold <
     ui_type = "drag"; ui_label = "Glow Threshold";
     ui_category = "Brightness & Glow";
@@ -905,6 +1012,23 @@ uniform float crt_convergence_b <
     ui_category = "Convergence";
     ui_min = -4.0; ui_max = 4.0; ui_step = 0.01;
 > = 0.0;
+
+uniform float crt_convergence_radial <
+    ui_type = "drag"; ui_label = "Radial Misconvergence";
+    ui_category = "Convergence";
+    ui_tooltip = "Physically based pincushion misconvergence model.\n"
+                 "Real CRT electron guns have convergence errors that grow\n"
+                 "toward the screen edges: delta_y = k * x^2\n"
+                 "where x is normalised horizontal distance from centre.\n"
+                 "\n"
+                 "Added ON TOP of the uniform convergence offsets above.\n"
+                 "At screen centre: no additional error. At edges: maximum.\n"
+                 "Red diverges up, Blue diverges down at the edges.\n"
+                 "\n"
+                 "0.0 = disabled (default). 0.5-1.0 = subtle authentic\n"
+                 "misconvergence. 2.0+ = strong edge colour fringing.";
+    ui_min = 0.0; ui_max = 4.0; ui_step = 0.1;
+> = 0.0;
 #endif // ENABLE_CONVERGENCE
 
 // ============================================================
@@ -1024,6 +1148,23 @@ uniform bool crt_grain_animate <
     ui_label = "Animate Grain";
     ui_category = "Film Grain";
 > = true;
+
+uniform float crt_grain_temporal <
+    ui_type = "drag"; ui_label = "Temporal Grain Correlation";
+    ui_category = "Film Grain";
+    ui_tooltip = "Blends a fraction of the previous frame grain into static areas.\n"
+                 "Real film grain has temporal correlation -- the same silver halide\n"
+                 "crystals sit in fixed positions, so static scenes show the same\n"
+                 "grain pattern rather than fully re-randomised noise each frame.\n"
+                 "\n"
+                 "0.0 = fully re-randomised every frame (original behaviour).\n"
+                 "0.3-0.5 = organic anchored feel on static areas.\n"
+                 "1.0 = grain freezes completely on static areas.\n"
+                 "\n"
+                 "Moving areas always get fresh grain regardless of this setting.\n"
+                 "Requires ENABLE_DECAY=1 for the reference frame.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
 
 uniform float crt_grain_shadows <
     ui_type = "drag"; ui_label = "Shadow Grain Amount";
@@ -1613,6 +1754,35 @@ texture2D crt_glow_v_tex < pooled = false; >
 sampler2D crt_glow_v_sampler
 {
     Texture   = crt_glow_v_tex;
+    MagFilter = LINEAR;
+    MinFilter = LINEAR;
+    MipFilter = NONE;
+};
+
+// Wide (secondary) glow textures -- run at 2x lower resolution than tight glow.
+// Large-area bloom for bright surfaces, complementing the tight per-element glow.
+texture2D crt_glow_wide_tex < pooled = false; >
+{
+    Width  = BUFFER_WIDTH  / (GLOW_RESOLUTION * 2);
+    Height = BUFFER_HEIGHT / (GLOW_RESOLUTION * 2);
+    Format = RGBA16F;
+};
+sampler2D crt_glow_wide_sampler
+{
+    Texture   = crt_glow_wide_tex;
+    MagFilter = LINEAR;
+    MinFilter = LINEAR;
+    MipFilter = NONE;
+};
+texture2D crt_glow_wide_v_tex < pooled = false; >
+{
+    Width  = BUFFER_WIDTH  / (GLOW_RESOLUTION * 2);
+    Height = BUFFER_HEIGHT / (GLOW_RESOLUTION * 2);
+    Format = RGBA16F;
+};
+sampler2D crt_glow_wide_v_sampler
+{
+    Texture   = crt_glow_wide_v_tex;
     MagFilter = LINEAR;
     MinFilter = LINEAR;
     MipFilter = NONE;
@@ -2477,15 +2647,14 @@ void crt_halation_PS(
     {
         #if ENABLE_PREBLUR
         float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
-        #else
-        // Lanczos for centre tap (sharpest warp reconstruction).
-        // Bilinear for offset taps -- they are Gaussian-weighted anyway,
-        // so the blur dominates and Lanczos per-tap would be wasteful.
+        #elif ENABLE_GEOMETRY
         float  px_bb = ReShade::PixelSize.x;
         float2 uv_hal = geom_warp(texcoord) + float2(float(i)*px_bb, 0.0);
-        float3 s = (i == 0)
-            ? geom_sample_lanczos2(ReShade::BackBuffer, geom_warp(texcoord))
-            : tex2D(ReShade::BackBuffer, uv_hal).rgb;
+        float3 s = tex2D(ReShade::BackBuffer, uv_hal).rgb;
+        #else
+        float  px_bb = ReShade::PixelSize.x;
+        float2 uv_hal = texcoord + float2(float(i)*px_bb, 0.0);
+        float3 s = tex2D(ReShade::BackBuffer, uv_hal).rgb;
         #endif
 
         float luma  = dot(s, float3(0.2126, 0.7152, 0.0722));
@@ -2542,32 +2711,40 @@ void crt_glow_h_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float3 result = 0.0;
-    float  wsum   = 0.0;
-    // Glow samples from preblur (at PREBLUR_RESOLUTION) or backbuffer (full-res).
-    // Scale pixel step to match the preblur source resolution.
     float  px     = ReShade::PixelSize.x * float(PREBLUR_RESOLUTION);
-    // Clamp radius to compile-time constant so loop unrolls fully
     int    radius = min(int(crt_glow_h_radius), GLOW_H_MAX_RADIUS);
-    float  sigma  = crt_glow_sigma * crt_glow_h_radius * 0.25;
+    float  sigma_base = crt_glow_sigma * crt_glow_h_radius * 0.25;
+
+    // Spectral bloom: per-channel sigma based on wavelength-dependent diffraction.
+    // Red (~700nm) spreads least, blue (~450nm) spreads most.
+    // At spectral=0: all channels identical. At spectral=1: R=0.75x, G=1.0x, B=1.35x.
+    float3 sigma_rgb = sigma_base * lerp(float3(1.0, 1.0, 1.0),
+                                         float3(0.75, 1.0, 1.35),
+                                         crt_glow_spectral);
+
+    float3 result  = 0.0;
+    float3 wsum_rgb = 0.0;
 
     [unroll]
     for (int i = -GLOW_H_MAX_RADIUS; i <= GLOW_H_MAX_RADIUS; i++)
     {
-        float  w = (abs(i) <= radius) ? gauss(float(i), sigma) : 0.0;
+        // Per-channel Gaussian weight -- zero for taps outside radius
+        float3 w = (abs(i) <= radius)
+                 ? float3(gauss(float(i), sigma_rgb.r),
+                          gauss(float(i), sigma_rgb.g),
+                          gauss(float(i), sigma_rgb.b))
+                 : float3(0.0, 0.0, 0.0);
+
         #if ENABLE_PREBLUR
         float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
-        #else
-        // Lanczos for centre tap, bilinear for offsets
+        #elif ENABLE_GEOMETRY
         float2 uv_glow = geom_warp(texcoord) + float2(float(i)*px, 0.0);
-        float3 s = (i == 0)
-            ? geom_sample_lanczos2(ReShade::BackBuffer, geom_warp(texcoord))
-            : tex2D(ReShade::BackBuffer, uv_glow).rgb;
+        float3 s = tex2D(ReShade::BackBuffer, uv_glow).rgb;
+        #else
+        float2 uv_glow = texcoord + float2(float(i)*px, 0.0);
+        float3 s = tex2D(ReShade::BackBuffer, uv_glow).rgb;
         #endif
         float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
-        // Soft knee: at knee=0 identical to original hard threshold.
-        // At knee>0, smoothstep fades glow in over a range of knee width
-        // above the threshold rather than switching on abruptly.
         float gate;
         if (crt_glow_knee < 0.001)
             gate = float(lum > crt_glow_threshold);
@@ -2575,11 +2752,12 @@ void crt_glow_h_PS(
             { float t = saturate((lum - crt_glow_threshold) / crt_glow_knee);
               gate = t * t * (3.0 - 2.0 * t); }
         s = max(s - crt_glow_threshold, 0.0) * lum * gate;
-        result += s * w;
-        wsum   += w;
+
+        result   += s * w;
+        wsum_rgb += w;
     }
 
-    float3 g = result / max(wsum, 1e-5);
+    float3 g = result / max(wsum_rgb, 1e-5);
     g = balance_glow(g, crt_glow_balance);
     color = float4(g, 1.0);
 }
@@ -2615,6 +2793,9 @@ void crt_glow_v_PS(
         float w = (abs(j) <= vrad) ? gauss(float(j), vsigma) : 0.0;
         #if ENABLE_PREBLUR
         float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
+        #elif ENABLE_GEOMETRY
+        float  py_bb = ReShade::PixelSize.y;
+        float3 s = tex2D(ReShade::BackBuffer, geom_warp(texcoord) + float2(0.0, float(j)*py_bb)).rgb;
         #else
         float  py_bb = ReShade::PixelSize.y;
         float3 s = tex2D(ReShade::BackBuffer, texcoord + float2(0.0, float(j)*py_bb)).rgb;
@@ -2635,6 +2816,79 @@ void crt_glow_v_PS(
 
     float3 glow = lerp(v_glow, h_glow, crt_glow_h_mix);
     color = float4(glow, 1.0);
+}
+
+// ============================================================
+// Wide glow H pass: large-area bloom at quarter resolution
+// ============================================================
+
+void crt_glow_wide_h_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    if (crt_glow_wide_strength < 0.001) { color = float4(0.0, 0.0, 0.0, 1.0); return; }
+
+    float  px     = ReShade::PixelSize.x * float(GLOW_RESOLUTION * 2);
+    int    radius = min(int(crt_glow_wide_radius), GLOW_H_MAX_RADIUS);
+    float  sigma  = crt_glow_sigma * crt_glow_wide_radius * 0.5;
+    float3 result = 0.0;
+    float  wsum   = 0.0;
+
+    [unroll]
+    for (int i = -GLOW_H_MAX_RADIUS; i <= GLOW_H_MAX_RADIUS; i++)
+    {
+        float w = (abs(i) <= radius) ? gauss(float(i), sigma) : 0.0;
+        #if ENABLE_PREBLUR
+        float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
+        #else
+        float3 s = tex2D(ReShade::BackBuffer, texcoord + float2(float(i)*px, 0.0)).rgb;
+        #endif
+        float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
+        float gate = float(lum > crt_glow_wide_threshold);
+        s = max(s - crt_glow_wide_threshold, 0.0) * lum * gate;
+        result += s * w;
+        wsum   += w;
+    }
+    color = float4(result / max(wsum, 1e-5), 1.0);
+}
+
+// Wide glow V pass: vertical blur + combine
+void crt_glow_wide_v_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    if (crt_glow_wide_strength < 0.001) { color = float4(0.0, 0.0, 0.0, 1.0); return; }
+
+    float  py     = ReShade::PixelSize.y * float(GLOW_RESOLUTION * 2);
+    int    vrad   = min(int(crt_glow_wide_radius), GLOW_V_MAX_RADIUS);
+    float  vsigma = crt_glow_sigma * crt_glow_wide_radius * 0.5;
+    float3 result = 0.0;
+    float  wsum   = 0.0;
+
+    [unroll]
+    for (int j = -GLOW_V_MAX_RADIUS; j <= GLOW_V_MAX_RADIUS; j++)
+    {
+        float w = (abs(j) <= vrad) ? gauss(float(j), vsigma) : 0.0;
+        #if ENABLE_PREBLUR
+        float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
+        #else
+        float3 s = tex2D(ReShade::BackBuffer, texcoord + float2(0.0, float(j)*py)).rgb;
+        #endif
+        float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
+        float gate = float(lum > crt_glow_wide_threshold);
+        s = max(s - crt_glow_wide_threshold, 0.0) * lum * gate;
+        result += s * w;
+        wsum   += w;
+    }
+
+    // Sample wide H glow and combine
+    float3 wide_h = tex2D(crt_glow_wide_sampler, texcoord).rgb;
+    float3 wide_v = result / max(wsum, 1e-5);
+    float3 wide   = lerp(wide_v, wide_h, crt_glow_h_mix);
+    wide = balance_glow(wide, crt_glow_balance);
+    color = float4(wide, 1.0);
 }
 
 // ============================================================
@@ -2699,25 +2953,63 @@ void crt_main_PS(
     #endif
 
     #if ENABLE_CONVERGENCE
-    float2 uv_r = texcoord + float2(0.0, crt_convergence_r * ReShade::PixelSize.y) + ca_r;
-    float2 uv_g = texcoord + float2(0.0, crt_convergence_g * ReShade::PixelSize.y);
-    float2 uv_b = texcoord + float2(0.0, crt_convergence_b * ReShade::PixelSize.y) + ca_b;
+    // Radial misconvergence: Δy = k * x² where x is normalised screen position.
+    // Grows from zero at centre to maximum at horizontal edges.
+    // Red diverges upward, blue downward -- matches real pincushion misconvergence.
+    float  cx          = (texcoord.x - 0.5) * 2.0; // [-1, 1]
+    float  ar          = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
+    float  radial_err  = crt_convergence_radial * cx * cx * ar * ReShade::PixelSize.y;
+    float2 uv_r = texcoord + float2(0.0, (crt_convergence_r - radial_err) * ReShade::PixelSize.y) + ca_r;
+    float2 uv_g = texcoord + float2(0.0,  crt_convergence_g               * ReShade::PixelSize.y);
+    float2 uv_b = texcoord + float2(0.0, (crt_convergence_b + radial_err) * ReShade::PixelSize.y) + ca_b;
     #else
     float2 uv_r = texcoord + ca_r;
     float2 uv_g = texcoord;
     float2 uv_b = texcoord + ca_b;
     #endif
 
+    float3 c;
     #if ENABLE_PREBLUR
-    float3 c = float3(
+    c = float3(
         tex2D(crt_preblur_v_sampler, uv_r).r,
         tex2D(crt_preblur_v_sampler, uv_g).g,
         tex2D(crt_preblur_v_sampler, uv_b).b);
+    #elif ENABLE_GEOMETRY
+    {
+        // Geometry: one Lanczos reconstruction at warped centre position,
+        // then cheap bilinear reads for CA/convergence channel offsets.
+        // This avoids 3x Lanczos cost -- the CA/convergence offsets are
+        // sub-pixel and bilinear is sufficient for them.
+        float2 tc_w = geom_warp(texcoord);
+        float3 c_warp = geom_sample_lanczos2(ReShade::BackBuffer, tc_w);
+        // For CA/convergence: read neighbours bilinearly and extract channels
+        c = c_warp; // start with Lanczos centre
+        #if ENABLE_CA || ENABLE_CONVERGENCE
+        float  py_off = ReShade::PixelSize.y;
+        float2 wuv_r  = tc_w + ca_r + float2(0.0,
+            #if ENABLE_CONVERGENCE
+            (crt_convergence_r - radial_err) * py_off
+            #else
+            0.0
+            #endif
+            );
+        float2 wuv_b  = tc_w + ca_b + float2(0.0,
+            #if ENABLE_CONVERGENCE
+            (crt_convergence_b + radial_err) * py_off
+            #else
+            0.0
+            #endif
+            );
+        c.r = tex2D(ReShade::BackBuffer, wuv_r).r;
+        c.b = tex2D(ReShade::BackBuffer, wuv_b).b;
+        #endif
+    }
     #else
-    float3 c = float3(
-        geom_sample_lanczos2(ReShade::BackBuffer, geom_warp(uv_r)).r,
-        geom_sample_lanczos2(ReShade::BackBuffer, geom_warp(uv_g)).g,
-        geom_sample_lanczos2(ReShade::BackBuffer, geom_warp(uv_b)).b);
+    // No geometry, no preblur: plain bilinear -- fast path
+    c = float3(
+        tex2D(ReShade::BackBuffer, uv_r).r,
+        tex2D(ReShade::BackBuffer, uv_g).g,
+        tex2D(ReShade::BackBuffer, uv_b).b);
     #endif
 
     // -- Phosphor profile correction (before BCS) --
@@ -2739,8 +3031,13 @@ void crt_main_PS(
 
     // -- Aperture grille mask --
     #if ENABLE_MASK
-        // Apply horizontal phase shift + orbit to mask
-        float2 fc_mask = fc + float2(phase_h + orbit_h, 0.0);
+        // Moiré dither: small random sub-pixel phase offset per 16x16 tile.
+        // Breaks strict mask periodicity that causes moiré with certain image
+        // frequencies (Haeberli & Segal 1990).
+        float2 tile_id  = floor(fc / 16.0);
+        uint   tile_rng = grain_uhash(grain_uhash(uint(tile_id.y)) + uint(tile_id.x));
+        float  dither_x = (float(tile_rng & 0xFFu) / 255.0 - 0.5) * crt_mask_dither;
+        float2 fc_mask = fc + float2(phase_h + orbit_h + dither_x, 0.0);
         float  mask_pixel_luma = dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722));
         float3 mask = crt_mask_apply(fc_mask, crt_triad_width, crt_mask_strength,
                                     crt_phosphor_sharpness, crt_phosphor_colour,
@@ -2782,6 +3079,28 @@ void crt_main_PS(
     #endif
 
     c_lin *= lerp(1.0, float3(beam_r, beam_g, beam_b), crt_scanline_strength);
+
+    // -- Electron beam horizontal bloom --
+    // On real CRTs, high-current beams (bright content) spread horizontally
+    // due to space charge repulsion between electrons. Simulated as a
+    // luminance-gated 3-tap horizontal blur on the post-scanline signal.
+    if (crt_beam_h_bloom > 0.001)
+    {
+        float  luma_bl  = dot(c_lin, float3(0.2126, 0.7152, 0.0722));
+        // Gate: only active above 70% luma, full effect above 90%
+        float  gate_bl  = smoothstep(0.7, 0.9, luma_bl);
+        if (gate_bl > 0.001)
+        {
+            float  bpx  = ReShade::PixelSize.x;
+            float3 cl   = tex2D(ReShade::BackBuffer, texcoord - float2(bpx, 0.0)).rgb;
+            float3 cr   = tex2D(ReShade::BackBuffer, texcoord + float2(bpx, 0.0)).rgb;
+            // Convert neighbours to linear
+            cl = glin(cl); cr = glin(cr);
+            // Gaussian 3-tap: weights 0.25, 0.5, 0.25
+            float3 bloomed = cl * 0.25 + c_lin * 0.5 + cr * 0.25;
+            c_lin = lerp(c_lin, bloomed, gate_bl * crt_beam_h_bloom);
+        }
+    }
 
     // -- Re-encode --
     c = crt_from_linear(c_lin);
@@ -2863,11 +3182,20 @@ void crt_main_PS(
     }
     #endif
 
-    // -- Glow (combined H+V, precomputed in GlowV pass) --
-    if (crt_glow_strength > 0.001)
+    // -- Glow (tight + wide dual-scale bloom) --
+    if (crt_glow_strength > 0.001 || crt_glow_wide_strength > 0.001)
     {
-        float3 glow = tex2D(crt_glow_v_sampler, texcoord).rgb;
-        c += crt_glow_strength * glow;
+        float2 glow_uv = texcoord;
+        if (crt_glow_strength > 0.001)
+        {
+            float3 glow = tex2D(crt_glow_v_sampler, glow_uv).rgb;
+            c += crt_glow_strength * glow;
+        }
+        if (crt_glow_wide_strength > 0.001)
+        {
+            float3 wide_glow = tex2D(crt_glow_wide_v_sampler, glow_uv).rgb;
+            c += crt_glow_wide_strength * wide_glow;
+        }
     }
 
     color = float4(c, 1.0);
@@ -2991,6 +3319,26 @@ void crt_grain_merged_PS(
         }
         delta = (genc(cl_grained) - c) * 0.5 + 0.5;
     }
+
+    // Temporal grain correlation: blend previous frame's grain into static areas.
+    // Real film grain has temporal coherence -- the silver halide crystals are
+    // physically fixed on the film stock, so static scenes see consistent grain.
+    // Motion mask from prev1_tex: large difference = motion = fresh grain.
+    #if ENABLE_DECAY
+    if (crt_grain_temporal > 0.001 && crt_grain_animate)
+    {
+        float3 prev_c     = tex2D(crt_decay_prev1_sampler, texcoord).rgb;
+        float  motion_mag = length(c - prev_c);
+        // Normalise: 0.05 luma diff = fully dynamic, 0.01 = static
+        float  motion     = saturate((motion_mag - 0.01) / 0.04);
+        // Prev grain delta from raw texture (the grain that was applied last frame)
+        float3 prev_delta = tex2D(crt_grain_raw_samp, texcoord).rgb;
+        // On static areas: blend toward previous grain. On moving areas: fresh grain.
+        float  static_blend = crt_grain_temporal * (1.0 - motion);
+        delta = lerp(delta, prev_delta, static_blend);
+    }
+    #endif
+
     out_delta = float4(delta, 1.0);
 }
 
@@ -3293,12 +3641,21 @@ void crt_persistence_PS(
     float py       = ReShade::PixelSize.y * crt_persistence_decay;
     float3 above   = tex2D(ReShade::BackBuffer, texcoord - float2(0.0, py)).rgb;
 
-    // Blend in linear light -- gamma-correct lerp avoids brightness bias in shadows.
+    // Per-channel persistence: R/G/B have different phosphor decay rates.
+    // Green persists longest (P22 ~2-3ms), red intermediate, blue shortest (~0.5ms).
+    // crt_persistence_r/g/b override per-channel; if all zero, fall back to uniform.
     float3 cur_lin   = glin(current);
     float3 above_lin = glin(above);
-    float3 trail_lin = lerp(cur_lin, above_lin, crt_persistence_strength);
+
+    // Per-channel blend weights: use per-channel if any non-zero, else uniform
+    float use_perchannel = max(max(crt_persistence_r, crt_persistence_g), crt_persistence_b);
+    float3 blend = (use_perchannel > 0.001)
+                 ? float3(crt_persistence_r, crt_persistence_g, crt_persistence_b)
+                 : float3(crt_persistence_strength, crt_persistence_strength, crt_persistence_strength);
+
+    float3 trail_lin = lerp(cur_lin, above_lin, blend);
     float3 trail     = genc(max(trail_lin, 0.0));
-    // Only ever adds light (like real phosphor persistence) -- never darkens
+    // Only ever adds light -- never darkens
     color = float4(max(current, trail), 1.0);
 }
 
@@ -3898,6 +4255,18 @@ technique CRT_Standalone <
         VertexShader = PostProcessVS;
         PixelShader  = crt_glow_v_PS;
         RenderTarget = crt_glow_v_tex;
+    }
+    pass GlowWideH
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_glow_wide_h_PS;
+        RenderTarget = crt_glow_wide_tex;
+    }
+    pass GlowWideV
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_glow_wide_v_PS;
+        RenderTarget = crt_glow_wide_v_tex;
     }
     pass MainCRT
     {

@@ -103,6 +103,7 @@ Controls the phosphor pattern simulation.
 - **Phosphor Sharpness** — edge softness of individual phosphor cells. Higher = harder edges
 - **Slot Mask Row Darkness** — only for type 2. Controls how dark the slot rows are. 0 = no slots, 1 = fully black rows
 - **QD-OLED Mask Offset X/Y** — fine-tune the subpixel pattern alignment in pixels. Adjust if the mask tiles don't align correctly with your panel's physical subpixel layout
+- **Mask Moiré Dither** — adds a small random sub-pixel phase offset to the mask pattern within each 16×16 tile, breaking the strict periodicity that causes moiré interference with certain image frequencies. 0.0 = off (default). 0.3–0.5 = noticeable moiré reduction. Based on Haeberli & Segal (1990) display simulation work
 
 ---
 
@@ -136,6 +137,7 @@ The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through
 - **Scanline Strength** — depth of dark scanlines between phosphor rows
 - **Scanline Sigma** — softness of the scanline edge
 - **Per-channel attack** — how much each channel contributes to the scanline modulation
+- **Beam Horizontal Bloom** — simulates electron beam horizontal spreading on very bright scanlines. On real CRTs, high-current beams (saturated whites) spread sideways due to space charge repulsion between electrons. Only active above ~70% luma, with full effect above 90%. 0.0 = off (default). 0.3–0.5 = subtle spreading on bright highlights
 
 ### Halation
 
@@ -162,16 +164,12 @@ A wide soft bloom applied to bright image areas.
 - **Sigma** — falloff shape within the radius
 - **H Mix** — blend between horizontal and vertical glow contributions
 - **Balance** — between glow contributing additively vs multiplicatively
+- **Wide Glow Strength** — second, larger bloom pass running at quarter resolution. Adds a broad soft halo over large bright areas (sky, windows, surfaces), complementing the tight per-element glow. 0.0 = off (default). 0.1–0.3 = subtle area bloom
+- **Wide Glow Radius** — radius of the wide bloom in pixels. Keep well above the tight glow radius
+- **Wide Glow Threshold** — luminance threshold for the wide bloom. Typically set lower than the tight glow threshold
+- **Spectral Bloom** — physically based chromatic bloom: blue light diffracts more than red through a lens, so the blue channel blooms wider. 0.0 = uniform (default). 0.5 = subtle coloured fringe on bright highlights. Based on wavelength-dependent diffraction
 
-### Halation
-Simulates light scattering behind the CRT glass faceplate — a soft warm glow around bright elements.
 
-- **Strength** — overall halation intensity
-- **Radius** — how far halation spreads (in pixels at quarter-resolution)
-- **Sigma** — falloff within the radius
-- **Saturation** — colour saturation of the halation glow
-- **Threshold** — luminance gate — only bright pixels produce halation
-- **Anisotropy** — horizontal vs vertical spread ratio. >1 = wider horizontal spread (realistic for vertical shadow mask stripes)
 
 ### Chromatic Aberration
 Radial colour fringing simulating glass lens dispersion. Zero at screen centre, maximum at corners.
@@ -181,6 +179,9 @@ Radial colour fringing simulating glass lens dispersion. Zero at screen centre, 
 
 ### Convergence
 Simulates CRT electron gun misregistration — independent vertical offset per R/G/B channel. Different from CA (which is radial/lens-based). Both can be used simultaneously.
+
+- **R/G/B Vertical** — uniform vertical offset per channel in pixels
+- **Radial Misconvergence** — physically based pincushion model: convergence error grows toward the screen edges following Δy = k × x². Zero at centre, maximum at horizontal edges. Red diverges upward, blue downward — matching real pincushion misconvergence geometry. Added on top of uniform offsets. 0.0 = off (default). 0.5–1.0 = subtle authentic edge fringing
 
 ### Vignette
 Edge darkening.
@@ -197,6 +198,7 @@ Edge darkening.
 - **Intensity** — grain amplitude. 0.15–0.25 is typical. Higher values darken bright areas due to Poisson variance rolloff
 - **Shadows** — minimum grain level in shadow areas
 - **Grain Size** — diffusion spread of grain clusters. 0.2 = fine (default). Higher = larger organic clumps
+- **Temporal Grain Correlation** — blends a fraction of the previous frame's grain into static areas. Real film grain has temporal coherence — silver halide crystals are fixed on the film stock, so static scenes show consistent grain rather than re-randomised noise each frame. 0.0 = fully re-randomised (default). 0.3–0.5 = organic anchored feel on static areas. Requires ENABLE_DECAY=1
 
 ### Gamma & Contrast
 
@@ -259,8 +261,9 @@ Requires `ENABLE_DECAY=1` for the motion reference frame. Without decay, sharpen
 
 Requires `ENABLE_PERSISTENCE=1`. Simulates slow phosphor fade — each frame blends slightly with a stored version of the previous frame, creating a subtle trailing afterimage on moving objects.
 
-- **Persistence Strength** — how much of the previous frame bleeds into the current
+- **Persistence Strength** — uniform blend across all channels. Used when all per-channel values are zero
 - **Persistence Decay Distance** — spatial gaussian decay radius of the stored frame
+- **Persistence R / G / B** — per-channel decay rates. Real P22 phosphors decay at different speeds: green persists longest (~2–3ms), red intermediate, blue fastest (~0.5ms). When any per-channel value is non-zero, these override the uniform Persistence Strength. For authentic P22 behaviour: G=0.4, R=0.25, B=0.1
 
 ### Anti Burn-In
 

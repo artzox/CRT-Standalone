@@ -1,61 +1,69 @@
 # CRT-Standalone — Changelog
 
-## Latest Update
+## Current Version
+
+### New Features
+
+#### Dual-Scale Bloom
+A second, wider glow pass running at quarter resolution adds a broad soft halo over large bright areas (sky, windows, surfaces), complementing the tight per-element glow. Three new controls under Brightness & Glow: Wide Glow Strength (default 0.0 = off), Wide Glow Radius, Wide Glow Threshold. Very cheap — two additional passes at quarter resolution.
+
+#### Spectral Bloom
+Physically based chromatic glow: blue light diffracts more than red through a lens aperture. The blue channel of the glow now blooms slightly wider than red (R=0.75×, G=1.0×, B=1.35× sigma) when Spectral Bloom > 0. Based on wavelength-dependent diffraction physics. Default 0.0 (uniform, original behaviour).
+
+#### Glow Soft Knee
+New Glow Knee slider (0.0–0.5, default 0.0) replaces the hard luminance threshold with a smoothstep fade-in. Above 0, dark pixels contribute progressively less to glow while bright pixels contribute fully — creating better contrast between lit and unlit areas. Works at Threshold=0. Suggested starting point: 0.1–0.3.
+
+#### Halation Warmth
+New Halation Warmth slider (0.0–1.0, default 0.0) controls the colour temperature of the halo. At 1.0: warm orange-red tint matching real CRT phosphor backscatter. Works alongside Desaturation: desaturation removes colour, warmth tints what replaces it.
+
+#### Moiré Dither
+New Mask Moiré Dither slider adds a small random sub-pixel phase offset per 16×16 tile, breaking the strict periodicity that causes moiré interference. Based on Haeberli & Segal (1990). Default 0.0 (off).
+
+#### Physics-Based Radial Misconvergence
+New Radial Misconvergence slider under Convergence. Implements the pincushion model Δy = k × x² — convergence error grows from zero at centre to maximum at horizontal edges, matching real CRT electron gun behaviour. Red diverges upward, blue downward. Added on top of existing uniform convergence offsets. Default 0.0 (off).
+
+#### Per-Channel Phosphor Persistence
+Three new sliders (Persistence R, G, B) allow independent decay rates per channel. Real P22 phosphors decay at different speeds: green longest (~2–3ms), red intermediate, blue fastest (~0.5ms). When any per-channel value is non-zero, they override the uniform Persistence Strength. Default 0.0 on all three (falls back to uniform).
+
+#### Electron Beam Horizontal Bloom
+New Beam Horizontal Bloom slider under Scanlines. Simulates space charge spreading of the electron beam on very bright content — saturated whites appear slightly smeared horizontally on real CRTs. Applied via a 3-tap Gaussian only above ~70% luma, with full effect above 90%. Default 0.0 (off).
+
+#### Temporal Grain Correlation
+New Temporal Grain Correlation slider under Film Grain. Real film grain has temporal coherence — silver halide crystals are fixed on the film stock. Static areas blend a fraction of the previous frame's grain, giving an anchored organic feel rather than fully re-randomised noise each frame. Moving areas always get fresh grain. Requires ENABLE_DECAY=1. Default 0.0 (off).
+
+---
 
 ### Phosphor Profile System — Overhauled
 
-- All phosphor matrices recomputed from documented CIE xy chromaticity coordinates using the standard derivation method. Previous P22 and Trinitron matrices were incorrect (Trinitron had an inflated green channel producing a green tint)
-- **Philips profile removed** — chromaticities are identical to SMPTE-C. Merged into a single entry: SMPTE-C / Sony BVM-D / Philips
-- **Two new profiles added:**
-  - NTSC 1953 (Illuminant C) — original FCC NTSC specification, very wide gamut, ~6774K white point. Early US TV receiver phosphors
-  - NTSC 1953 D93 (Japanese) — same NTSC 1953 primaries with ~9300K white point. Japan never adopted SMPTE-C. Relevant for SNES, Mega Drive, Saturn content as seen on Japanese consumer CRTs
-- Sony BVM-D confirmed identical to SMPTE-C — noted in tooltip. Most PS1/PS2/N64 era games were mastered on BVM-D monitors
-- Gamma decode/encode in apply_phosphor corrected from hardcoded pow(x, 2.2) to proper sRGB piecewise TRC (IEC 61966-2-1)
-- ENABLE_PHOSPHOR now defaults to 1 (was 0 — uniforms were hidden and feature was inactive by default)
+All phosphor matrices recomputed from documented CIE xy chromaticity coordinates using the standard derivation method. Previous P22 and Trinitron matrices were incorrect.
 
-**Note:** Profile index order changed. If you have a saved preset using Trinitron (previously index 4), it will now point to NTSC 1953. Update your preset manually:
-- Old index 3 (Philips) → now index 2 (SMPTE-C / BVM-D / Philips)
-- Old index 4 (Trinitron) → now index 3
-- New index 4 = NTSC 1953
-- New index 5 = NTSC 1953 D93
+**Profile index order changed.** Check your preset after loading.
 
----
+| Index | Profile |
+|---|---|
+| 0 | EBU (PAL) |
+| 1 | P22 (US consumer) |
+| 2 | SMPTE-C / Sony BVM-D / Philips (identical chromaticities — merged) |
+| 3 | Sony Trinitron |
+| 4 | NTSC 1953 (Illuminant C) — new |
+| 5 | NTSC 1953 D93 Japanese (~9300K) — new |
 
-### Glow — Soft Knee Added
-
-- New **Glow Knee** slider (0.0–0.5, default 0.0) under Brightness & Glow
-- At 0.0: identical to previous behaviour — hard threshold, all pixels above threshold contribute equally
-- Above 0: dark pixels contribute progressively less to glow while bright pixels contribute fully. Creates better contrast between lit and unlit areas, with glow feeling more localised to bright elements rather than bleeding into dark regions
-- Works at Threshold=0: the knee creates a natural luminance ramp — no hard cutoff needed
-- Suggested starting point: 0.1–0.3. Higher values (0.4–0.5) for high-contrast scenes
-- The ideal value varies by game brightness distribution
-
----
-
-### Halation — Warmth Control Added
-
-- New **Halation Warmth** slider (0.0–1.0, default 0.0) under Halation
-- At 0.0: neutral white desaturation (existing behaviour unchanged)
-- At 1.0: warm orange-red tint matching real CRT phosphor backscatter — real halation has a spectral character from phosphor emission bleeding through glass
-- Works alongside Desaturation: desaturation controls how much colour is removed, warmth controls the colour of what replaces it
+- Gamma decode/encode corrected from hardcoded pow(x, 2.2) to proper sRGB piecewise TRC
+- ENABLE_PHOSPHOR now defaults to 1 (was 0 — uniforms were hidden and feature was inactive)
 
 ---
 
 ### Algorithm Quality Improvements
 
-- **CAS sharpening** upgraded to 8-neighbour min/max for the contrast estimate. Diagonal neighbours (NE/NW/SE/SW) now included in the local contrast calculation — more accurate on diagonal edges, less over-sharpening. Sharpening kernel unchanged (still 4-axis N/S/E/W)
-- **Reconstruction filter** now selectable via `PREBLUR_FILTER` preprocessor define:
-  - 0 = Lanczos2 (4×4=16 taps, default)
-  - 1 = Lanczos3 (6×6=36 taps, ~2× cost, sharpest)
-  - 2 = Catmull-Rom (4×4=16 taps, same cost as Lanczos2, bicubic spline — crispest edges)
-  - Applies to pre-blur passes and geometry warp centre-tap sampling
-- **Phosphor persistence** gamma-correct: trail blend now done in linear light (lerp in linear, re-encode) rather than sRGB space
+- **CAS sharpening** — upgraded to 8-neighbour min/max for the contrast estimate. Diagonal neighbours (NE/NW/SE/SW) now used for contrast calculation, not just N/S/E/W. More accurate on diagonal edges
+- **Reconstruction filter** — `PREBLUR_FILTER` preprocessor define selects between Lanczos2 (0, default), Lanczos3 (1), and Catmull-Rom (2) for pre-blur and geometry warp centre-tap sampling
+- **Phosphor persistence** — trail blend now done in linear light (gamma-correct)
 
 ---
 
 ### Preprocessor Gates — New Defines
 
-The following features now hide their UI sliders and compile out when set to 0:
+UI categories now hide when their feature is disabled:
 
 | Define | Default |
 |---|---|
@@ -69,23 +77,22 @@ The following features now hide their UI sliders and compile out when set to 0:
 
 ---
 
-### Compute Grain Removed
-
-- All `#if ENABLE_GRAIN_COMPUTE` dead code blocks removed (~267 lines). The compute grain path was non-functional and produced incorrect output. Standard Gaussian grain path is unaffected
-
----
-
-### Motion-Adaptive Sharpening (New Pass)
-
-- `ENABLE_MOTION_SHARPEN=1` adds a separate CAS sharpening pass that uses frame-to-frame luma difference as a motion mask
-- Moving regions receive stronger sharpening; static areas receive little or none
-- Complements BFI by counteracting sample-and-hold blur on moving objects
-- Requires `ENABLE_DECAY=1` for the motion reference frame
-- Off by default
-
----
-
 ### Optimisation
 
-- Glow H and V passes now run at configurable reduced resolution (`GLOW_RESOLUTION`, default 2 = half res). Glow is a wide low-frequency effect — half resolution is perceptually indistinguishable
-- Phosphor decay history stores merged: `RawCapture` and `Prev1Store` combined into a single dual-output pass (`PhosphorDecayStoreRawPrev1`), saving one full-resolution pass
+- Glow H and V passes run at configurable reduced resolution (`GLOW_RESOLUTION=2` default = half res)
+- Phosphor decay history stores merged from 3 passes to 2 (dual-output pass)
+- Compute grain dead code removed (~267 lines)
+- No-preblur + no-geometry path uses plain bilinear sampling — restored correct performance (previous version accidentally used Lanczos in blur loops when preblur was off, costing ~10fps)
+
+---
+
+### Compute Grain Removed
+
+All `#if ENABLE_GRAIN_COMPUTE` dead code blocks removed. The compute grain path was non-functional. Standard Gaussian grain path unaffected.
+
+---
+
+### Motion-Adaptive Sharpening
+
+`ENABLE_MOTION_SHARPEN=1` adds a separate CAS pass using frame-to-frame luma difference as a motion mask. Moving regions get stronger sharpening, static areas less. Requires ENABLE_DECAY=1. Off by default.
+

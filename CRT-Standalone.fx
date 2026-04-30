@@ -82,6 +82,26 @@
 #ifndef ENABLE_EDGE_BLUR
     #define ENABLE_EDGE_BLUR 1
 #endif
+
+// Chromatic aberration (radial colour fringing)
+#ifndef ENABLE_CA
+    #define ENABLE_CA 1
+#endif
+
+// Convergence error simulation (per-channel vertical offset)
+#ifndef ENABLE_CONVERGENCE
+    #define ENABLE_CONVERGENCE 1
+#endif
+
+// Vignette (edge darkening)
+#ifndef ENABLE_VIGNETTE
+    #define ENABLE_VIGNETTE 1
+#endif
+
+// Film grain
+#ifndef ENABLE_GRAIN
+    #define ENABLE_GRAIN 1
+#endif
 // Post-scanline vertical softening (fixes scanline-edge aliasing on curved geometry)
 #ifndef ENABLE_SCANLINE_SOFTEN
     #define ENABLE_SCANLINE_SOFTEN 1
@@ -97,6 +117,25 @@
 // blurring on moving objects. Off by default; enable only alongside ENABLE_DECAY.
 #ifndef ENABLE_MOTION_SHARPEN
     #define ENABLE_MOTION_SHARPEN 0
+#endif
+
+// Reconstruction filter for Pre-Blur passes and geometry warp sampling.
+// Used when sampling the backbuffer at non-integer (warped) positions.
+// Has no effect on halation/glow blur kernels -- those stay Gaussian.
+//
+// PREBLUR_FILTER:
+//   0 = Lanczos2  (4x4=16 taps, default). Good sharpness, minimal ringing.
+//   1 = Lanczos3  (6x6=36 taps). Sharper, ~2x cost. Best for geometry warp.
+//   2 = Catmull-Rom (4x4=16 taps). Bicubic spline. Slightly crisper than
+//       Lanczos2 on high-contrast edges (scanlines, mask), less overshoot.
+//       Same cost as Lanczos2. Good alternative for geometry.
+#ifndef PREBLUR_FILTER
+    #define PREBLUR_FILTER 0
+#endif
+
+// Kept for backwards compatibility -- PREBLUR_FILTER=1 is equivalent
+#ifndef PREBLUR_LANCZOS_TAPS
+    #define PREBLUR_LANCZOS_TAPS 2
 #endif
 // Phosphor persistence simulation (within-frame asymmetric vertical blur)
 #ifndef ENABLE_PERSISTENCE
@@ -162,7 +201,7 @@
 // 0 = disabled (passthrough, default)
 // 1 = enabled (apply CRT profile + display gamut matrices)
 #ifndef ENABLE_PHOSPHOR
-    #define ENABLE_PHOSPHOR 0
+    #define ENABLE_PHOSPHOR 1
 #endif
 
 // Screen geometry (barrel distortion) -- final pass UV warp
@@ -184,6 +223,7 @@
 // Uniforms -- Pre-blur (equivalent to Guest SIZEH/SIZEV/SIGMA)
 // ============================================================
 
+#if ENABLE_PREBLUR
 uniform float crt_preblur_h_sigma <
     ui_type = "drag"; ui_label = "Pre-Blur Horizontal Sigma";
     ui_category = "Pre-Blur";
@@ -211,6 +251,8 @@ uniform float crt_preblur_v_radius <
     ui_tooltip = "Tap radius for vertical pre-blur. Equivalent to Guest SIZEV.";
     ui_min = 1.0; ui_max = 16.0; ui_step = 1.0;
 > = 6.0;
+
+#endif // ENABLE_PREBLUR
 
 // ============================================================
 // Uniforms -- Post-Scanline Softening
@@ -552,16 +594,28 @@ uniform float crt_colour_temp <
 uniform int crt_phosphor_profile <
     ui_type = "combo"; ui_label = "CRT Phosphor Profile";
     ui_category = "Phosphor Profile";
-    ui_tooltip = "Converts input signal to the colour space of the target CRT phosphor set.\n"
-                 "Applied before BCS -- corrects colour as the original CRT would render it.\n"
-                 "Use with Display Gamut to complete the colour pipeline.\n"
-                 "0: EBU/sRGB -- standard consumer CRT (matches sRGB, minimal change)\n"
-                 "1: P22 -- typical P22 phosphor, slightly warmer red\n"
-                 "2: SMPTE-C -- broadcast standard, slightly cooler\n"
-                 "3: Philips -- European CRT phosphors\n"
-                 "4: Trinitron -- Sony/Mitsubishi rare earth, purest primaries\n"
+    ui_tooltip = "Remaps game colours through the chosen CRT phosphor primaries to XYZ,\n"
+                 "then to your display gamut. All matrices computed from documented\n"
+                 "CIE xy chromaticity coordinates.\n"
+                 "\n"
+                 "EBU (PAL): European CRTs from 1970s. Green slightly more yellow.\n"
+                 "P22: Common US consumer CRT phosphors (1970s-90s NTSC sets).\n"
+                 "SMPTE-C / BVM-D / Philips: US broadcast, Sony BVM-D reference\n"
+                 "  monitor, and Philips European CRTs -- all share identical\n"
+                 "  chromaticities. Most PS1/PS2/N64 era games mastered on BVM-D.\n"
+                 "Trinitron: Measured Sony Trinitron phosphor chromaticities.\n"
+                 "NTSC 1953: Original FCC spec. Very wide gamut, Illuminant C\n"
+                 "  white (~6774K). Early 1950s US TV receiver phosphors.\n"
+                 "NTSC 1953 D93: Japanese CRTs (~9300K). Very cool white point.\n"
+                 "  SNES/MD/Saturn as seen in Japan on consumer CRTs.\n"
+                 "\n"
                  "Set ENABLE_PHOSPHOR=0 to bypass entirely.";
-    ui_items = "EBU / sRGB\0P22\0SMPTE-C\0Philips\0Trinitron\0";
+    ui_items = "EBU (PAL)\0"
+               "P22 (US consumer)\0"
+               "SMPTE-C / Sony BVM-D / Philips\0"
+               "Sony Trinitron\0"
+               "NTSC 1953 (Illuminant C)\0"
+               "NTSC 1953 D93 (Japanese)\0";
 > = 0;
 
 uniform int crt_display_gamut <
@@ -687,7 +741,34 @@ uniform float crt_glow_sigma <
 uniform float crt_glow_threshold <
     ui_type = "drag"; ui_label = "Glow Threshold";
     ui_category = "Brightness & Glow";
+    ui_tooltip = "Luminance level below which glow is suppressed.\n"
+                 "0.0 = all pixels contribute to glow.\n"
+                 "0.3+ = only bright elements bloom.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_glow_knee <
+    ui_type = "drag"; ui_label = "Glow Knee";
+    ui_category = "Brightness & Glow";
+    ui_tooltip = "Controls how selectively glow is applied across luminance levels.\n"
+                 "\n"
+                 "0.0 = original behaviour: hard threshold, all pixels above it\n"
+                 "      contribute equally (weighted by luma).\n"
+                 "\n"
+                 "Above 0: dark pixels contribute progressively less to glow,\n"
+                 "bright pixels contribute fully. Creates better contrast between\n"
+                 "lit and unlit areas -- glow feels more localised to bright\n"
+                 "elements rather than bleeding into dark regions of the scene.\n"
+                 "\n"
+                 "Works even at Threshold=0: the knee creates a natural luminance\n"
+                 "ramp from 0 to the knee width, suppressing dark pixel glow\n"
+                 "contribution without cutting it off entirely.\n"
+                 "\n"
+                 "Suggested starting point: 0.1-0.3. Higher values (0.4-0.5)\n"
+                 "are more aggressive -- useful for scenes with strong contrast\n"
+                 "between bright elements and dark backgrounds. The ideal value\n"
+                 "varies by game brightness distribution.";
+    ui_min = 0.0; ui_max = 0.5; ui_step = 0.01;
 > = 0.0;
 
 uniform float crt_glow_h_mix <
@@ -707,6 +788,7 @@ uniform float crt_glow_balance <
 // Uniforms -- Halation
 // ============================================================
 
+#if ENABLE_HALATION
 uniform float crt_halation_strength <
     ui_type = "drag"; ui_label = "Halation Strength";
     ui_category = "Halation";
@@ -754,8 +836,24 @@ uniform float crt_halation_saturation <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.6;
 
+uniform float crt_halation_warmth <
+    ui_type = "drag"; ui_label = "Halation Warmth";
+    ui_category = "Halation";
+    ui_tooltip = "Colour temperature of the halation glow.\n"
+                 "0.0 = pure white scatter (neutral).\n"
+                 "1.0 = warm orange-red tint (realistic phosphor backscatter).\n"
+                 "Real CRT halation is slightly warm due to phosphor spectral\n"
+                 "emission bleeding through the glass.\n"
+                 "Works alongside Desaturation: desaturation removes colour,\n"
+                 "warmth tints what remains.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+
+#endif // ENABLE_HALATION
 
 // ============================================================
+#if ENABLE_CA
 // Uniforms -- Chromatic Aberration
 // ============================================================
 
@@ -782,8 +880,10 @@ uniform float crt_ca_falloff <
                  "3.0+ = cubic -- very concentrated at corners only.";
     ui_min = 1.0; ui_max = 4.0; ui_step = 0.1;
 > = 2.0;
+#endif // ENABLE_CA
 
 // ============================================================
+#if ENABLE_CONVERGENCE
 // Uniforms -- Convergence
 // ============================================================
 
@@ -805,8 +905,10 @@ uniform float crt_convergence_b <
     ui_category = "Convergence";
     ui_min = -4.0; ui_max = 4.0; ui_step = 0.01;
 > = 0.0;
+#endif // ENABLE_CONVERGENCE
 
 // ============================================================
+#if ENABLE_VIGNETTE
 // Uniforms -- Vignette
 // ============================================================
 
@@ -866,11 +968,13 @@ uniform float crt_vignette_hdr_threshold <
                  "Prevents vignette from crushing HDR content at screen edges.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
+#endif // ENABLE_VIGNETTE
 
 // ============================================================
 // Uniforms -- Edge Blur
 // ============================================================
 
+#if ENABLE_EDGE_BLUR
 uniform float crt_edge_blur_strength <
     ui_type = "drag"; ui_label = "Edge Blur Strength";
     ui_category = "Edge Blur";
@@ -898,7 +1002,10 @@ uniform float crt_edge_blur_radius <
     ui_min = 0.5; ui_max = 16.0; ui_step = 0.25;
 > = 3.0;
 
+#endif // ENABLE_EDGE_BLUR
+
 // ============================================================
+#if ENABLE_GRAIN
 // Uniforms -- Film Grain
 // ============================================================
 
@@ -936,29 +1043,11 @@ uniform float crt_grain_size <
 > = 0.2;
 
 // Analog film grain parameters (compute shader path only)
-#if ENABLE_GRAIN_COMPUTE
-uniform float crt_grain_film_gamma <
-    ui_type = "drag"; ui_label = "Film Gamma (Analog only)";
-    ui_category = "Film Grain";
-    ui_tooltip = "Shifts the luminance-to-grain relationship.\n"
-                 "Negative: more grain in shadows. Positive: more in highlights.\n"
-                 "0.0 = neutral (default). Only active when compute is available.";
-    ui_min = -1.0; ui_max = 1.0; ui_step = 0.05;
-> = 0.0;
-
-uniform float crt_grain_film_toe <
-    ui_type = "drag"; ui_label = "Film Shadow Emphasis (Analog only)";
-    ui_category = "Film Grain";
-    ui_tooltip = "Emphasises grain in shadow regions, mimicking film toe compression.\n"
-                 "0.0 = disabled. 1.0 = strong shadow grain emphasis.\n"
-                 "Only active when compute is available.";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
-> = 0.0;
-#endif
 
 uniform uint  FRAMECOUNT < source = "framecount"; >;
 uniform float CRT_TIMER     < source = "timer"; >;       // milliseconds since start
 uniform float CRT_FRAMETIME < source = "frametime"; >;   // actual ms elapsed this frame
+#endif // ENABLE_GRAIN
 
 // ============================================================
 // Uniforms -- Phosphor Decay
@@ -1415,25 +1504,6 @@ sampler2D crt_preblur_v_sampler
 // Stores fraction of halide crystals exposed at each luminance level.
 // Falls back to analytical Gaussian path when compute not available.
 // ============================================================
-#if ENABLE_GRAIN_COMPUTE
-#define GRAIN_NUM_COLORS 256
-#define GRAIN_NUM_TRIALS 1024
-#define GRAIN_BATCH_SIZE 4
-
-texture2D crt_grain_poisson_tex < pooled = false; >
-{
-    Width  = GRAIN_NUM_COLORS;
-    Height = GRAIN_NUM_TRIALS;
-    Format = RGBA8;
-};
-sampler2D crt_grain_poisson_sampler
-{
-    Texture   = crt_grain_poisson_tex;
-    MagFilter = POINT;
-    MinFilter = POINT;
-};
-storage2D crt_grain_poisson_storage { Texture = crt_grain_poisson_tex; };
-#endif
 
 // Phosphor persistence: previous frame storage
 #if ENABLE_DECAY
@@ -1495,6 +1565,7 @@ sampler2D crt_persistence_samp
 };
 #endif
 
+#if ENABLE_GRAIN
 // Grain delta texture: stores (grained - original) delta only
 // Diffusion blurs this delta then adds it to the clean image
 texture2D crt_grain_raw_tex < pooled = false; >
@@ -1513,6 +1584,7 @@ texture2D crt_pregrain_tex < pooled = false; >
     Format = RGBA16F;
 };
 sampler2D crt_pregrain_samp { Texture = crt_pregrain_tex; };
+#endif // ENABLE_GRAIN
 
 // Glow horizontal blur output
 texture2D crt_glow_tex < pooled = false; >
@@ -1681,13 +1753,52 @@ float3 soop_inv_reinhard_simple(float3 x)
 // ============================================================
 
 #if ENABLE_PHOSPHOR
-// Input: RGB -> XYZ for each CRT phosphor profile
-static const float3x3 kPhosphor_EBU     = float3x3(0.412391,0.212639,0.019331, 0.357584,0.715169,0.119195, 0.180481,0.072192,0.950532);
-static const float3x3 kPhosphor_P22     = float3x3(0.430554,0.222004,0.020182, 0.341550,0.706655,0.129553, 0.178352,0.071341,0.939322);
-static const float3x3 kPhosphor_SMPTEC  = float3x3(0.396686,0.210299,0.006131, 0.372504,0.713766,0.115356, 0.181266,0.075936,0.967571);
-static const float3x3 kPhosphor_Philips = float3x3(0.393521,0.212376,0.018739, 0.365258,0.701060,0.111934, 0.191677,0.086564,0.958385);
-static const float3x3 kPhosphor_Trinitron = float3x3(0.392258,0.209410,0.016061, 0.351135,0.725680,0.093636, 0.166603,0.064910,0.850324);
+// ── Phosphor input matrices: RGB -> XYZ ─────────────────────────────────────
+// Each matrix converts from the CRT's native phosphor primaries to CIE XYZ.
+// All computed from CIE xy chromaticity coordinates via the standard method:
+// M = [R|G|B] * diag(solve([R|G|B], W)) where R,G,B are primary XYZ columns
+// and W is the white point XYZ.
+// White point is D65 (x=0.3127, y=0.3290) unless noted.
+//
+// Profile            R_xy        G_xy        B_xy        White
+// EBU (PAL)         0.640,0.330 0.290,0.600 0.150,0.060 D65
+// P22               0.625,0.340 0.280,0.595 0.155,0.070 D65
+// SMPTE-C / BVM-D   0.630,0.340 0.310,0.595 0.155,0.070 D65
+// Trinitron         0.621,0.341 0.295,0.605 0.150,0.063 D65 (measured)
+// NTSC 1953         0.670,0.330 0.210,0.710 0.140,0.080 Illum C (x=0.3101,y=0.3162)
+// NTSC 1953 D93     0.670,0.330 0.210,0.710 0.140,0.080 D93 (x=0.2848,y=0.2932)
 
+// EBU (PAL) -- European Broadcasting Union Tech 3213.
+// Used by PAL CRTs from 1970s onwards. Green slightly more yellow than sRGB.
+static const float3x3 kPhosphor_EBU     = float3x3(0.430554,0.222004,0.020182, 0.341550,0.706655,0.129553, 0.178352,0.071341,0.939322);
+
+// P22 -- common US consumer CRT phosphor set (ca. 1970s-90s NTSC sets).
+// Slightly warmer red, cooler green than EBU.
+static const float3x3 kPhosphor_P22     = float3x3(0.449662,0.244616,0.025181, 0.316256,0.672044,0.141186, 0.184538,0.083340,0.922691);
+
+// SMPTE-C (1987) -- North American broadcast standard, also used by Sony BVM-D
+// broadcast reference monitors and Philips European CRTs (same chromaticities).
+// Most PS1/PS2/N64 era games were mastered on BVM-D.
+static const float3x3 kPhosphor_SMPTEC  = float3x3(0.393521,0.212376,0.018739, 0.365258,0.701060,0.111934, 0.191677,0.086564,0.958385);
+
+// Sony Trinitron -- measured phosphor chromaticities from Trinitron tubes.
+// Slightly more saturated green, deeper blue than standard EBU.
+static const float3x3 kPhosphor_Trinitron = float3x3(0.435625,0.239208,0.026657, 0.333914,0.684807,0.113191, 0.180917,0.075985,0.949210);
+
+// NTSC 1953 -- original FCC NTSC specification with Illuminant C white point.
+// Very wide gamut (especially saturated reds and greens), but Illuminant C
+// white (~6774K) is warmer than D65. The widest gamut CRT standard.
+// Games did NOT target this -- it reflects early 1950s TV receiver phosphors.
+static const float3x3 kPhosphor_NTSC1953 = float3x3(0.606937,0.298939,0.000000, 0.173509,0.586625,0.066099, 0.200263,0.114436,1.115748);
+
+// NTSC 1953 at D93 white point -- Japanese CRT monitors (~9300K).
+// Japan never adopted SMPTE-C, continuing to use 1953 NTSC primaries
+// but with a cooler 9300K white point standard. Very blue whites.
+// Most relevant for SNES, Mega Drive, and Saturn era content as seen
+// in Japan on consumer CRTs of that period.
+static const float3x3 kPhosphor_NTSC1953_D93 = float3x3(0.551060,0.271418,0.000000, 0.173843,0.587755,0.066226, 0.246448,0.140827,1.373065);
+
+// ── Display output matrices: XYZ -> RGB ─────────────────────────────────────
 // Output: XYZ -> RGB for each display gamut
 static const float3x3 kGamut_sRGB    = float3x3( 3.240970,-0.969244, 0.055630,-1.537383, 1.875968,-0.203977,-0.498611, 0.041555, 1.056972);
 static const float3x3 kGamut_Modern  = float3x3( 2.791723,-0.894766, 0.041678,-1.173165, 1.815586,-0.130886,-0.440973, 0.032000, 1.002034);
@@ -1697,15 +1808,16 @@ static const float3x3 kGamut_Rec2020 = float3x3( 1.716651,-0.666684, 0.017640,-0
 
 float3 apply_phosphor(float3 c)
 {
-    // Select input phosphor matrix
+    // Select input phosphor matrix (CRT primaries -> XYZ)
     float3x3 m_in;
     if      (crt_phosphor_profile == 0) m_in = kPhosphor_EBU;
     else if (crt_phosphor_profile == 1) m_in = kPhosphor_P22;
     else if (crt_phosphor_profile == 2) m_in = kPhosphor_SMPTEC;
-    else if (crt_phosphor_profile == 3) m_in = kPhosphor_Philips;
-    else                                m_in = kPhosphor_Trinitron;
+    else if (crt_phosphor_profile == 3) m_in = kPhosphor_Trinitron;
+    else if (crt_phosphor_profile == 4) m_in = kPhosphor_NTSC1953;
+    else                                m_in = kPhosphor_NTSC1953_D93;
 
-    // Select output display gamut matrix
+    // Select output display gamut matrix (XYZ -> display RGB)
     float3x3 m_out;
     if      (crt_display_gamut == 0) m_out = kGamut_sRGB;
     else if (crt_display_gamut == 1) m_out = kGamut_Modern;
@@ -1713,12 +1825,19 @@ float3 apply_phosphor(float3 c)
     else if (crt_display_gamut == 3) m_out = kGamut_Adobe;
     else                             m_out = kGamut_Rec2020;
 
-    // Convert: input RGB -> XYZ (via phosphor primaries) -> output RGB (via display gamut)
-    // Guest matrices are row-major: mul(vector, matrix) treats vector as row
-    float3 c_lin = pow(max(c, 0.0), 2.2);         // decode to linear
-    float3 xyz   = mul(c_lin, m_in);               // to XYZ via CRT phosphors
-    float3 rgb   = mul(xyz,   m_out);              // to display RGB
-    float3 c_out = pow(max(rgb, 0.0), 1.0/2.2);   // re-encode
+    // Decode to linear using sRGB piecewise TRC (correct IEC 61966-2-1).
+    // Defined inline because glin/genc macros are not yet in scope here.
+    // sRGB decode: linear = c/12.92 if c <= 0.04045, else ((c+0.055)/1.055)^2.4
+    float3 c_lin = (c <= 0.04045)
+                 ? c / 12.92
+                 : pow((c + 0.055) / 1.055, 2.4);
+    float3 xyz   = mul(c_lin, m_in);   // CRT phosphor RGB -> XYZ
+    float3 rgb   = mul(xyz,   m_out);  // XYZ -> display RGB
+    // sRGB encode: c/12.92 if linear <= 0.0031308, else 1.055*linear^(1/2.4)-0.055
+    float3 rgb_s = max(rgb, 0.0);
+    float3 c_out = (rgb_s <= 0.0031308)
+                 ? rgb_s * 12.92
+                 : 1.055 * pow(rgb_s, 1.0/2.4) - 0.055;
 
     return lerp(c, c_out, crt_phosphor_strength);
 }
@@ -1936,35 +2055,71 @@ float2 geom_warp(float2 tc)
 // the softening introduced by the geometry UV warp.
 // 4x4 tap grid (16 samples) centred on the warped texcoord.
 // ============================================================
-float lanczos2_weight(float x)
+// ── Reconstruction filter functions ─────────────────────────────
+// Used by pre-blur and geometry warp sampling.
+// Selected by PREBLUR_FILTER: 0=Lanczos2, 1=Lanczos3, 2=Catmull-Rom
+
+// Lanczos: sinc(x)*sinc(x/a), a = lobe count (2 or 3)
+float lanczos_weight(float x, float a)
 {
-    // Lanczos2 window: sinc(x) * sinc(x/2), x in [-2, 2]
     const float PI = 3.14159265358979;
     if (abs(x) < 0.0001) return 1.0;
-    if (abs(x) >= 2.0)   return 0.0;
+    if (abs(x) >= a)     return 0.0;
     float px  = PI * x;
-    float px2 = PI * x * 0.5;
-    return (sin(px) / px) * (sin(px2) / px2);
+    float pxa = PI * x / a;
+    return (sin(px) / px) * (sin(pxa) / pxa);
+}
+
+// Catmull-Rom: piecewise cubic spline, 4-tap support [-2,2]
+// Slightly crisper than Lanczos2 on high-contrast edges with less ringing.
+float catmull_rom_weight(float x)
+{
+    x = abs(x);
+    if (x >= 2.0) return 0.0;
+    if (x >= 1.0) return ((-0.5*x + 2.5)*x - 4.0)*x + 2.0;
+    return ((1.5*x - 2.5)*x*x + 1.0);
+}
+
+// Legacy alias
+float lanczos2_weight(float x) { return lanczos_weight(x, 2.0); }
+
+// Unified reconstruction sampler -- switches on PREBLUR_FILTER
+float recon_weight(float x)
+{
+#if PREBLUR_FILTER == 2
+    return catmull_rom_weight(x);
+#elif PREBLUR_FILTER == 1
+    return lanczos_weight(x, 3.0);
+#else
+    return lanczos_weight(x, 2.0);
+#endif
 }
 
 float3 geom_sample_lanczos2(sampler2D tex, float2 tc)
 {
-    float2 px  = ReShade::PixelSize;
-    float2 tc_px = tc / px;          // texcoord in pixel units
-    float2 tc_floor = floor(tc_px - 0.5) + 0.5; // centre of nearest pixel
+    float2 px      = ReShade::PixelSize;
+    float2 tc_px   = tc / px;
+    float2 tc_base = floor(tc_px);
+
+    // Tap radius: 2 for Lanczos2/Catmull-Rom (4x4=16 taps),
+    //             3 for Lanczos3 (6x6=36 taps)
+#if PREBLUR_FILTER == 1
+    const int r = 3;
+#else
+    const int r = 2;
+#endif
 
     float3 result = 0.0;
     float  wsum   = 0.0;
 
-    // 4x4 tap grid
-    for (int j = -1; j <= 2; j++)
+    for (int j = -r + 1; j <= r; j++)
     {
-        float wy = lanczos2_weight(tc_px.y - (tc_floor.y + float(j)));
-        for (int i = -1; i <= 2; i++)
+        float wy = recon_weight(tc_px.y - (tc_base.y + float(j)));
+        for (int i = -r + 1; i <= r; i++)
         {
-            float wx = lanczos2_weight(tc_px.x - (tc_floor.x + float(i)));
+            float wx = recon_weight(tc_px.x - (tc_base.x + float(i)));
             float  w = wx * wy;
-            float2 sample_tc = (tc_floor + float2(float(i), float(j))) * px;
+            float2 sample_tc = (tc_base + float2(float(i), float(j))) * px;
             result += tex2D(tex, clamp(sample_tc, 0.0, 1.0)).rgb * w;
             wsum   += w;
         }
@@ -2029,9 +2184,12 @@ float3 crt_mask_apply(float2 fc, float tw_ref, float strength, float sharp,
         float g = smoothstep(0.333, 0.333+edge, t) * smoothstep(0.667, 0.667-edge, t);
         float b = smoothstep(0.667, 0.667+edge, t) * smoothstep(1.0,   1.0-edge, t);
         mask = float3(r, g, b) * phcol;
-        // Every other row pair is darkened by slot_dark amount
-        float row  = floor(fc.y * 0.5);
-        float lane = (frac(row * 0.5) < 0.25) ? (1.0 - slot_dark) : 1.0;
+        // Slot rows: fwidth-based AA on the vertical row boundary.
+        // Smoothstep replaces the hard binary step for anti-aliased slot edges.
+        float  fw_y    = fwidth(fc.y * 0.5);
+        float  row_t   = frac(floor(fc.y * 0.5) * 0.5); // 0 or 0.5
+        float  slot_aa = smoothstep(0.0, fw_y, row_t) * smoothstep(0.5, 0.5 - fw_y, row_t);
+        float  lane    = 1.0 - slot_dark * (1.0 - slot_aa);
         mask *= lane;
     }
     else if (mask_type == 3)
@@ -2085,10 +2243,6 @@ float3 crt_mask_apply(float2 fc, float tw_ref, float strength, float sharp,
         float2 cell_pos = (frac(fc_off / cell_size) * 2.0 - 1.0);
 
         // Phosphor sizes scale with cell_size to maintain consistent fill ratio
-        // at any triad width. At small cells (native) the base sizes apply.
-        // At larger cells we fill more of the cell to prevent visible dark gaps
-        // that would cause softening and brightness loss.
-        // Scale factor: approaches 1.0 at small cells, grows toward ~0.92 at large cells
         float fill_scale = 1.0 - 0.08 / max(cell_size, 0.5);
 
         // Green phosphor: larger rounded square (~60% of cell at native size)
@@ -2324,16 +2478,25 @@ void crt_halation_PS(
         #if ENABLE_PREBLUR
         float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
         #else
-        float  px_bb = ReShade::PixelSize.x; // backbuffer is always full-res
+        // Lanczos for centre tap (sharpest warp reconstruction).
+        // Bilinear for offset taps -- they are Gaussian-weighted anyway,
+        // so the blur dominates and Lanczos per-tap would be wasteful.
+        float  px_bb = ReShade::PixelSize.x;
+        float2 uv_hal = geom_warp(texcoord) + float2(float(i)*px_bb, 0.0);
         float3 s = (i == 0)
             ? geom_sample_lanczos2(ReShade::BackBuffer, geom_warp(texcoord))
-            : tex2D(ReShade::BackBuffer, geom_warp(texcoord) + float2(float(i)*px_bb, 0.0)).rgb;
+            : tex2D(ReShade::BackBuffer, uv_hal).rgb;
         #endif
 
         float luma  = dot(s, float3(0.2126, 0.7152, 0.0722));
         float above = max(luma - crt_halation_threshold, 0.0);
-        float3 warm = float3(1.05, 1.0, 0.9) * luma;
-        s = lerp(s, warm, crt_halation_saturation) * (above / max(luma, 0.0001));
+        // Warm target: lerp between neutral white and warm orange-red.
+        // crt_halation_warmth=0 -> (1,1,1)*luma (neutral white desaturation)
+        // crt_halation_warmth=1 -> (1.08,0.95,0.82)*luma (warm CRT phosphor tint)
+        float3 warm_tint = lerp(float3(1.0, 1.0, 1.0),
+                                float3(1.08, 0.95, 0.82),
+                                crt_halation_warmth) * luma;
+        s = lerp(s, warm_tint, crt_halation_saturation) * (above / max(luma, 0.0001));
 
         // sigma_h = sigma * anisotropy -- wider H spread when anisotropy > 1
         float w = gauss(float(i), crt_halation_sigma * max(crt_halation_anisotropy, 0.01));
@@ -2395,12 +2558,23 @@ void crt_glow_h_PS(
         #if ENABLE_PREBLUR
         float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
         #else
+        // Lanczos for centre tap, bilinear for offsets
+        float2 uv_glow = geom_warp(texcoord) + float2(float(i)*px, 0.0);
         float3 s = (i == 0)
             ? geom_sample_lanczos2(ReShade::BackBuffer, geom_warp(texcoord))
-            : tex2D(ReShade::BackBuffer, geom_warp(texcoord) + float2(float(i)*px, 0.0)).rgb;
+            : tex2D(ReShade::BackBuffer, uv_glow).rgb;
         #endif
         float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
-        s = max(s - crt_glow_threshold, 0.0) * lum;
+        // Soft knee: at knee=0 identical to original hard threshold.
+        // At knee>0, smoothstep fades glow in over a range of knee width
+        // above the threshold rather than switching on abruptly.
+        float gate;
+        if (crt_glow_knee < 0.001)
+            gate = float(lum > crt_glow_threshold);
+        else
+            { float t = saturate((lum - crt_glow_threshold) / crt_glow_knee);
+              gate = t * t * (3.0 - 2.0 * t); }
+        s = max(s - crt_glow_threshold, 0.0) * lum * gate;
         result += s * w;
         wsum   += w;
     }
@@ -2446,7 +2620,13 @@ void crt_glow_v_PS(
         float3 s = tex2D(ReShade::BackBuffer, texcoord + float2(0.0, float(j)*py_bb)).rgb;
         #endif
         float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
-        s = max(s - crt_glow_threshold, 0.0) * lum;
+        float gate_v;
+        if (crt_glow_knee < 0.001)
+            gate_v = float(lum > crt_glow_threshold);
+        else
+            { float t = saturate((lum - crt_glow_threshold) / crt_glow_knee);
+              gate_v = t * t * (3.0 - 2.0 * t); }
+        s = max(s - crt_glow_threshold, 0.0) * lum * gate_v;
         v_glow += s * w;
         vwsum  += w;
     }
@@ -2504,26 +2684,29 @@ void crt_main_PS(
         float orbit_h       = 0.0;
     #endif
 
-    // Chromatic aberration: radial per-channel offset scaling with distance from centre.
-    // Red refracts least (innermost), blue most (outermost) -- physically correct.
-    // Integrates with convergence: CA offsets are added to convergence offsets,
-    // so both effects compound naturally on the same channel samples.
-    // When geometry is active, geom_warp() is applied after, so CA follows curvature.
+    // Chromatic aberration + convergence UV offsets.
+    // When disabled, all channels sample from the same texcoord.
+    #if ENABLE_CA
     float2 ca_centre  = texcoord - 0.5;
     float  ca_dist    = pow(length(ca_centre * float2(float(BUFFER_WIDTH)/float(BUFFER_HEIGHT), 1.0)),
                             crt_ca_falloff);
     float2 ca_vec     = ca_centre * ca_dist * crt_ca_strength;
-    // R offset: inward (toward centre) -- shortest displacement
-    // G offset: none -- reference channel
-    // B offset: outward (away from centre) -- longest displacement
     float2 ca_r = -ca_vec * 0.5;
     float2 ca_b =  ca_vec;
+    #else
+    float2 ca_r = 0.0;
+    float2 ca_b = 0.0;
+    #endif
 
-    // Convergence: sample R, G, B from slightly offset vertical positions
-    // Mimics electron gun misregistration. Zero cost -- just offset UV reads.
+    #if ENABLE_CONVERGENCE
     float2 uv_r = texcoord + float2(0.0, crt_convergence_r * ReShade::PixelSize.y) + ca_r;
     float2 uv_g = texcoord + float2(0.0, crt_convergence_g * ReShade::PixelSize.y);
     float2 uv_b = texcoord + float2(0.0, crt_convergence_b * ReShade::PixelSize.y) + ca_b;
+    #else
+    float2 uv_r = texcoord + ca_r;
+    float2 uv_g = texcoord;
+    float2 uv_b = texcoord + ca_b;
+    #endif
 
     #if ENABLE_PREBLUR
     float3 c = float3(
@@ -2631,9 +2814,8 @@ void crt_main_PS(
         c *= bb_gain3;
     }
 
-    // -- Vignette (rectangular CRT-authentic, HDR-aware, geometry-linked) --
-    // Multiplies independent H and V power-curve falloffs, naturally producing
-    // darker corners than edges -- matching real CRT electron beam intensity falloff.
+    // -- Vignette --
+    #if ENABLE_VIGNETTE
     if (crt_vignette_strength > 0.001)
     {
         float2 uv_c = texcoord * 2.0 - 1.0; // [-1,1] on both axes
@@ -2661,6 +2843,7 @@ void crt_main_PS(
                                          max(1.0 - crt_vignette_hdr_threshold, 0.001));
         c *= lerp(1.0, vig, vig_gate);
     }
+    #endif // ENABLE_VIGNETTE
 
     // -- Halation (bright element glass scatter, localised) --
     #if ENABLE_HALATION
@@ -2749,200 +2932,8 @@ void crt_edge_blur_PS(
 // Film Grain: Compute shader path (Poisson Analog Film Grain)
 // Self-contained -- all required functions inlined, no external includes.
 // ============================================================
-#if ENABLE_GRAIN_COMPUTE
 
-// Morton 2D->1D: interleaves bits of x and y
-uint grain_morton2D(uint2 p)
-{
-    p = (p | (p << 8u)) & 0x00FF00FFu;
-    p = (p | (p << 4u)) & 0x0F0F0F0Fu;
-    p = (p | (p << 2u)) & 0x33333333u;
-    p = (p | (p << 1u)) & 0x55555555u;
-    return p.x | (p.y << 1u);
-}
-
-// Hash::next2D equivalent: two floats from one rng state
-float2 grain_hash_next2D(inout uint rng)
-{
-    rng = grain_uhash(rng);
-    uint u = rng;
-    rng = grain_uhash(rng);
-    uint v = rng;
-    return float2(grain_unorm1(u) * 0.5 + 0.5, grain_unorm1(v) * 0.5 + 0.5);
-}
-
-// Analog film response curve (matches Marty's filmic_curve)
-float3 grain_filmic_curve(float3 x, float toe, float gamma)
-{
-    gamma = gamma < 0.0 ? gamma * 0.5 : gamma * 6.0;
-    x = saturate(x);
-    float3 t = saturate(1.0 - x);
-    t *= t; t *= t; // t^4
-    x = saturate(x - x * toe * t);
-    float3 gx = x * gamma;
-    return (gx + x) / (gx + 1.0);
-}
-
-// halide count from intensity (matches Marty's grain_intensity_to_halide_count)
-
-uint grain_halide_count_from_intensity(float intensity)
-{
-    // Matches Marty's grain_intensity_to_halide_count():
-    // inner = (1-(1-I)^2)*2  -- rises quickly from 0 at I=0
-    // halide_count = 1 + 127 * saturate(2 - inner)
-    // At I=0: inner=0, count=128 (maximum -- many small crystals, high ISO)
-    // At I=1: inner=2, count=1   (minimum -- few large crystals, low ISO)
-    // This is INVERSE of what you might expect: more intensity = fewer (larger) crystals
-    // which produce more visible grain per crystal -> net effect is more apparent grain.
-    float inner = saturate((1.0 - (1.0 - intensity) * (1.0 - intensity)) * 2.0);
-    return max(1u, uint(1u + 127u * saturate(2.0 - inner)));
-}
-
-float grain_blend_from_intensity(float intensity)
-{
-    // Blend factor: how much the grained version mixes with original.
-    // Saturates at 1.0 for intensity >= 0.5 (full grain from halfway).
-    return saturate((1.0 - (1.0 - intensity) * (1.0 - intensity)) * 2.0);
-}
-
-// Compute shader: builds the 256x1024 Poisson lookup table
-// Each thread handles GRAIN_BATCH_SIZE color levels for one trial row.
-// Group size: (GRAIN_NUM_COLORS/GRAIN_BATCH_SIZE, 1, 1) = (64, 1, 1)
-// Dispatch: (1, GRAIN_NUM_TRIALS, 1) = (1, 1024, 1)
-[numthreads(64, 1, 1)]
-void crt_grain_poisson_CS(
-    in uint3 groupthreadid     : SV_GroupThreadID,
-    in uint3 groupid           : SV_GroupID,
-    in uint3 dispatchthreadid  : SV_DispatchThreadID,
-    in uint  threadid          : SV_GroupIndex)
-{
-    uint trial = dispatchthreadid.y;
-    uint rng   = grain_uhash(trial + 2u);
-    if (crt_grain_animate) rng += FRAMECOUNT;
-
-    uint num_grains = grain_halide_count_from_intensity(crt_grain_intensity);
-
-    // Process GRAIN_BATCH_SIZE color levels per thread
-    float4 poisson_result = 0.0;
-    float4 exposure_level;
-    [unroll]
-    for (uint j = 0u; j < GRAIN_BATCH_SIZE; j++)
-    {
-        uint color_idx = dispatchthreadid.x * GRAIN_BATCH_SIZE + j;
-        float c = float(color_idx) / float(GRAIN_NUM_COLORS - 1);
-        // Apply film response curve to luminance before simulation
-        c = grain_filmic_curve(c.xxx, crt_grain_film_toe, crt_grain_film_gamma).x;
-        c = glin(c); // to linear
-        exposure_level[j] = c;
-    }
-
-    // Poisson simulation: for each grain, does a random uniform land below exposure?
-    [loop]
-    for (uint g = 0u; g < num_grains; g++)
-    {
-        float2 r1 = grain_hash_next2D(rng);
-        float2 r2 = grain_hash_next2D(rng);
-        float4 rand_rgba = float4(r1, r2);
-        [unroll]
-        for (uint j = 0u; j < GRAIN_BATCH_SIZE; j++)
-            poisson_result[j] += step(rand_rgba[j], exposure_level[j]);
-    }
-
-    // Store normalised result
-    [unroll]
-    for (uint j2 = 0u; j2 < GRAIN_BATCH_SIZE; j2++)
-    {
-        uint color_idx = dispatchthreadid.x * GRAIN_BATCH_SIZE + j2;
-        tex2Dstore(crt_grain_poisson_storage,
-                   int2(int(color_idx), int(trial)),
-                   float4(poisson_result[j2] / float(num_grains), 0.0, 0.0, 1.0));
-    }
-}
-
-// Analog grain PS: reads from the Poisson table using Morton-structured spatial seed
-void crt_grain_analog_PS(
-    in  float4 position  : SV_Position,
-    in  float2 texcoord  : TEXCOORD0,
-    out float4 out_clean : SV_Target0,
-    out float4 out_delta : SV_Target1)
-{
-    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    out_clean = float4(c, 1.0);
-    float3 delta = float3(0.5, 0.5, 0.5);
-
-    if (crt_grain_intensity > 0.001)
-    {
-        uint2 p = uint2(position.xy);
-
-        // Spatially-structured seed via Morton curve within 32x32 block
-        // (identical to Marty's AnalogGrainPS block orientation logic)
-        uint2 block = p % 32u;
-        uint2 tile  = p / 32u;
-        uint tile_rng = grain_uhash(grain_uhash(tile.y) + tile.x);
-        if (tile_rng & 1u) block.x = 31u - block.x; tile_rng >>= 1u;
-        if (tile_rng & 1u) block.y = 31u - block.y; tile_rng >>= 1u;
-        if (tile_rng & 1u) block   = block.yx;
-
-        uint row_idx = grain_morton2D(block) % uint(GRAIN_NUM_TRIALS);
-
-        // Convert pixel to linear for table lookup.
-        float3 c_lin = glin(c);
-
-        // Poisson table lookup: each channel uses an INDEPENDENT Morton row.
-        // This is critical for colour grain -- R, G, B get different Poisson trials
-        // so they can diverge, creating the characteristic pink/cyan/green patches
-        // of real film grain. Using the same row for all channels gives monochrome noise.
-        // Offset each channel row by a large prime to decorrelate them.
-        // Small row offsets: channels are nearby in the table so they share
-        // similar but not identical Poisson outcomes. This gives subtle colour
-        // variation rather than wildly independent channels.
-        // The Morton spatial structure does the heavy lifting for clustering.
-        uint row_r = row_idx;
-        uint row_g = (row_idx + 3u)  % uint(GRAIN_NUM_TRIALS);
-        uint row_b = (row_idx + 7u)  % uint(GRAIN_NUM_TRIALS);
-
-        float3 poisson;
-        if (crt_grain_colour)
-        {
-            poisson.r = tex2Dfetch(crt_grain_poisson_sampler,
-                        int2(int(saturate(c_lin.r) * float(GRAIN_NUM_COLORS) * 0.99999), int(row_r))).x;
-            poisson.g = tex2Dfetch(crt_grain_poisson_sampler,
-                        int2(int(saturate(c_lin.g) * float(GRAIN_NUM_COLORS) * 0.99999), int(row_g))).x;
-            poisson.b = tex2Dfetch(crt_grain_poisson_sampler,
-                        int2(int(saturate(c_lin.b) * float(GRAIN_NUM_COLORS) * 0.99999), int(row_b))).x;
-        }
-        else
-        {
-            float grey_lin = dot(c_lin, float3(0.2126, 0.7152, 0.0722));
-            float p1 = tex2Dfetch(crt_grain_poisson_sampler,
-                       int2(int(saturate(grey_lin) * float(GRAIN_NUM_COLORS) * 0.99999), int(row_r))).x;
-            poisson = p1.xxx;
-        }
-
-        // Grain signal: signed delta in linear light.
-        // Normalise Poisson variance by 1/sqrt(num_grains) so amplitude is
-        // consistent across crystal counts. Scale by intensity for user control.
-        uint   num_grains   = grain_halide_count_from_intensity(crt_grain_intensity);
-        float  norm_scale   = 1.0 / sqrt(float(max(num_grains, 1u)));
-        float  blend        = grain_blend_from_intensity(crt_grain_intensity);
-        float  amplitude    = blend * norm_scale * 8.0;  // scaled to match non-compute amplitude
-        float3 grain_delta  = (poisson - c_lin) * amplitude;
-        // Add delta in linear, then encode to sRGB. Use max(0) not saturate so
-        // bright clips and dark clips are handled symmetrically by genc -- avoids
-        // the negative-clipping bias that makes the image appear dark overall.
-        float3 grained_lin  = max(c_lin + grain_delta, 0.0);
-        float3 grained_srgb = clamp(genc(grained_lin), 0.0, 1.0);
-
-        // Store delta for diffusion pass, random uint in alpha for displacement
-        delta = (grained_srgb - c) * 0.5 + 0.5;
-        uint rng_out = grain_uhash(grain_uhash(p.y) + p.x);
-        out_delta = float4(delta, float(rng_out & 1023u) / 1023.0);
-        return;
-    }
-    out_delta = float4(delta, 0.0);
-}
-#endif // ENABLE_GRAIN_COMPUTE
-
+#if ENABLE_GRAIN
 // ============================================================
 // Grain pass (merged): Snapshot + delta in one dual-output pass
 // Output 0 -> crt_pregrain_tex (clean snapshot)
@@ -3104,14 +3095,8 @@ void crt_grain_diffuse_PS(
             float3 d   = tex2D(crt_grain_raw_samp, uv).rgb;
 
             uint2  pi  = uint2(uv * float2(BUFFER_WIDTH, BUFFER_HEIGHT));
-            #if ENABLE_GRAIN_COMPUTE
-            // Alpha channel stores pre-computed random uint from analog grain PS
-            // (matching Marty's FilmDiffusionPS approach exactly)
-            uint   rng    = uint(tex2Dfetch(crt_grain_raw_samp, int2(pi)).w * 1023.0);
-            #else
             uint   rng = grain_uhash(grain_uhash(pi.y) + pi.x);
             if (crt_grain_animate) rng += FRAMECOUNT;
-            #endif
             float2 rand01 = float2(rng & 31u, rng >> 5u) / 32.0;
             float2 bm     = grain_boxmuller_2d(rand01) * sigma;
             float2 offs   = tp + bm;
@@ -3130,6 +3115,8 @@ void crt_grain_diffuse_PS(
     // Add diffused grain delta to clean pre-grain image
     color = float4(saturate(clean + grain), 1.0);
 }
+
+#endif // ENABLE_GRAIN
 
 // ============================================================
 // Post-scanline vertical softening pass
@@ -3198,9 +3185,18 @@ void crt_sharpen_PS(
     float3 e  = tex2D(ReShade::BackBuffer, texcoord + float2( px.x, 0.0)).rgb;
     float3 w  = tex2D(ReShade::BackBuffer, texcoord + float2(-px.x, 0.0)).rgb;
 
-    // Local min/max for contrast adaptation
-    float3 mn = min(min(min(n, s), min(e, w)), c);
-    float3 mx = max(max(max(n, s), max(e, w)), c);
+    // Diagonal neighbours for more accurate local contrast estimate.
+    // AMD full CAS uses 8-neighbour min/max for the weight computation
+    // while keeping the 4-axis sharpening kernel -- better on diagonal edges.
+    float3 ne = tex2D(ReShade::BackBuffer, texcoord + float2( px.x, -px.y)).rgb;
+    float3 nw = tex2D(ReShade::BackBuffer, texcoord + float2(-px.x, -px.y)).rgb;
+    float3 se = tex2D(ReShade::BackBuffer, texcoord + float2( px.x,  px.y)).rgb;
+    float3 sw = tex2D(ReShade::BackBuffer, texcoord + float2(-px.x,  px.y)).rgb;
+
+    // Local min/max across all 8 neighbours (contrast estimate only)
+    float3 mn = min(min(min(n, s), min(e, w)), min(min(ne, nw), min(se, sw)));
+    float3 mx = max(max(max(n, s), max(e, w)), max(max(ne, nw), max(se, sw)));
+    mn = min(mn, c); mx = max(mx, c);
 
     // Normalise range relative to peak -- makes weight HDR-safe
     // Without normalisation, large HDR values cause near-division-by-zero
@@ -3297,11 +3293,13 @@ void crt_persistence_PS(
     float py       = ReShade::PixelSize.y * crt_persistence_decay;
     float3 above   = tex2D(ReShade::BackBuffer, texcoord - float2(0.0, py)).rgb;
 
-    // Blend: take the brighter of current pixel or the decayed trail from above
-    // This only ever adds light (like real phosphor persistence) never darkens
-    // The lerp weight is the strength slider directly -- much more visible
-    float3 trail   = lerp(current, above, crt_persistence_strength);
-    color          = float4(max(current, trail), 1.0);
+    // Blend in linear light -- gamma-correct lerp avoids brightness bias in shadows.
+    float3 cur_lin   = glin(current);
+    float3 above_lin = glin(above);
+    float3 trail_lin = lerp(cur_lin, above_lin, crt_persistence_strength);
+    float3 trail     = genc(max(trail_lin, 0.0));
+    // Only ever adds light (like real phosphor persistence) -- never darkens
+    color = float4(max(current, trail), 1.0);
 }
 
 void crt_persistence_store_PS(
@@ -3948,39 +3946,21 @@ technique CRT_Standalone <
         PixelShader  = crt_edge_blur_PS;
     }
     #endif
-#if ENABLE_GRAIN_COMPUTE
-    // Analog Film Grain: Poisson simulation via compute shader
-    // Pass 1: Build lookup table (compute)
-    pass GrainPoissonCS
-    {
-        ComputeShader = crt_grain_poisson_CS<64, 1, 1>;
-        DispatchSizeX = 1;
-        DispatchSizeY = 1024;
-        DispatchSizeZ = 1;
-    }
-    // Pass 2: Table lookup with Morton spatial seed -> grain delta + random alpha
+    #if ENABLE_GRAIN
     pass GrainMerged
     {
-        VertexShader  = PostProcessVS;
-        PixelShader   = crt_grain_analog_PS;
-        RenderTarget0 = crt_pregrain_tex;
-        RenderTarget1 = crt_grain_raw_tex;
-    }
-#else
-    // Fallback: analytical Gaussian grain (no compute)
-    pass GrainMerged
-    {
+        // Dual output: clean snapshot + grain delta
         VertexShader  = PostProcessVS;
         PixelShader   = crt_grain_merged_PS;
         RenderTarget0 = crt_pregrain_tex;
         RenderTarget1 = crt_grain_raw_tex;
     }
-#endif
     pass GrainDiffuse
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_grain_diffuse_PS;
     }
+    #endif // ENABLE_GRAIN
     #if ENABLE_DECAY
     // Merged store: raw capture + prev1 update in one dual-output pass.
     // Saves one full-resolution pass vs the original three separate passes.

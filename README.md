@@ -45,6 +45,10 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `ENABLE_BURNIN_ORBIT` | 1 | Anti burn-in orbital drift |
 | `ENABLE_PHOSPHOR` | 1 | Phosphor colour profile |
 | `ENABLE_GEOMETRY` | 0 | Screen geometry / curvature (experimental) |
+| `ENABLE_CA` | 1 | Chromatic aberration |
+| `ENABLE_CONVERGENCE` | 1 | Convergence error simulation |
+| `ENABLE_VIGNETTE` | 1 | Vignette (edge darkening) |
+| `ENABLE_GRAIN` | 1 | Film grain |
 
 ### Resolution Defines
 
@@ -53,6 +57,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `HALATION_RESOLUTION` | 4 | Halation blur resolution divisor. 4=quarter res (recommended), 2=half, 1=full |
 | `GLOW_RESOLUTION` | 2 | Glow blur resolution divisor. 2=half res (recommended), 1=full |
 | `PREBLUR_RESOLUTION` | 1 | Pre-blur resolution. Keep at 1 — lower values visibly degrade quality |
+| `PREBLUR_FILTER` | 0 | Reconstruction filter for pre-blur and geometry warp sampling. 0=Lanczos2 (default, 4×4 taps), 1=Lanczos3 (6×6 taps, sharper, ~2× cost), 2=Catmull-Rom (4×4 taps, crispest edges at same cost as Lanczos2) |
 
 ### HDR / Pipeline
 
@@ -132,6 +137,16 @@ The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through
 - **Scanline Sigma** — softness of the scanline edge
 - **Per-channel attack** — how much each channel contributes to the scanline modulation
 
+### Halation
+
+- **Strength** — overall halation intensity
+- **Radius** — how far halation spreads
+- **Sigma** — falloff shape within the radius
+- **Desaturation** — how much the halo desaturates toward the warm tint colour. 0 = full colour scatter, 1 = fully desaturated
+- **Warmth** — colour temperature of the halo. 0.0 = neutral white, 1.0 = warm orange-red tint matching real CRT phosphor backscatter. Works alongside Desaturation
+- **Threshold** — luminance gate — only bright pixels produce halation
+- **Anisotropy** — horizontal vs vertical spread ratio
+
 ### Beam Modulation
 Controls how beam width varies with signal level — brighter pixels produce wider, softer beams.
 
@@ -141,6 +156,7 @@ Controls how beam width varies with signal level — brighter pixels produce wid
 A wide soft bloom applied to bright image areas.
 
 - **Threshold** — luminance above which glow starts
+- **Knee** — controls how selectively glow is applied across luminance levels. 0.0 = original behaviour, all pixels above threshold contribute equally. Above 0, dark pixels contribute progressively less to glow while bright pixels contribute fully — creating better contrast between lit and unlit areas, with glow feeling more localised to bright elements rather than bleeding into dark regions. Works even at Threshold=0: the knee creates a natural luminance ramp suppressing dark pixel contribution without a hard cutoff. Suggested starting point: 0.1–0.3. Higher values (0.4–0.5) are more aggressive and best suited to high-contrast scenes. The ideal value varies by game brightness distribution
 - **Strength** — how bright the glow is
 - **H/V Radius** — how far glow spreads horizontally and vertically
 - **Sigma** — falloff shape within the radius
@@ -193,13 +209,21 @@ Edge darkening.
 
 ### Phosphor Profile
 
-Simulates the colour response of real CRT phosphor types (P22, EBU, etc.).
+Remaps game colours through a chosen CRT phosphor primary set to CIE XYZ, then to your display gamut. All matrices computed from documented CIE xy chromaticity coordinates.
 
-- **Phosphor Profile** — choose a phosphor type to apply its colour primaries
-- **Correction Strength** — how strongly the phosphor colour matrix is applied
-- **Phosphor Sharpness** — spatial sharpness of the phosphor dot pattern
-- **Display Gamut** — target display colour space for the output transform
-- **Phosphor Colour Temperature** — white point of the simulated phosphor
+**Important:** If you have an existing preset saved with Trinitron or later profiles, the index order changed in this version — check your selected profile after loading. Philips (formerly index 3) has been merged into SMPTE-C as they share identical chromaticities.
+
+| Index | Profile | Notes |
+|---|---|---|
+| 0 | EBU (PAL) | European CRTs from 1970s onwards. Green slightly more yellow than sRGB |
+| 1 | P22 (US consumer) | Common US consumer CRT phosphors, 1970s–90s NTSC sets |
+| 2 | SMPTE-C / Sony BVM-D / Philips | US broadcast standard and Sony BVM-D reference monitor. Philips European CRTs share identical chromaticities. Most PS1/PS2/N64 era games were mastered on BVM-D |
+| 3 | Sony Trinitron | Measured Trinitron phosphor chromaticities. Subtle shift — slightly more saturated green |
+| 4 | NTSC 1953 (Illuminant C) | Original FCC NTSC specification. Very wide gamut, especially reds and greens. Illuminant C white (~6774K, slightly warmer than D65). Early 1950s US TV receiver phosphors — games did not target this standard |
+| 5 | NTSC 1953 D93 (Japanese) | Same NTSC 1953 primaries with ~9300K Japanese CRT white point. Japan never adopted SMPTE-C. Most relevant for SNES, Mega Drive, Saturn content as it appeared on Japanese consumer hardware |
+
+- **Correction Strength** — blend between original colours (0.0) and fully corrected (1.0). Allows subtle correction without full commitment
+- **Display Gamut** — output colour space of your display. sRGB for standard monitors, DCI-P3 Modern for most OLEDs and wide-gamut displays, Rec. 2020 for QD-OLED native gamut
 
 ### Edge Blur
 
@@ -431,6 +455,12 @@ With `frames=2` and `gain=0.5`, the lit frame outputs the game signal unchanged 
 For content with headroom (midtones and below), raising gain above 0.5 partially compensates by boosting the lit frame. For content near peak brightness (sky, clouds, bloom), no compensation is possible — the lit frame is already at the display ceiling. This manifests as bright areas appearing grey compared to no-BFI.
 
 Hardware BFI (ULMB, LightBoost) addresses this by boosting the backlight intensity during the lit window — effectively multiplying peak luminance by the inverse of the duty cycle. Software BFI cannot do this.
+
+---
+
+## Games Tested with BFI / BB — Working Great
+
+Sifu, Crash Bandicoot, Cuphead, Hades 1 & 2, Hollow Knight, Planet of Lana 2, Legacy of Kain: Defiance Remaster, Moons of Madness, Cocoon, Prince of Persia: The Lost Crown, The Rogue: Prince of Persia, Stray, Baja: Edge of Control, Ori and the Blind Forest, Jotun, Neva, Gris, Layers of Fear 2, Untitled Goose Game, Dead Cells, FAR: Lone Sails, Mirror's Edge Catalyst, Tony Hawk's Pro Skater 1+2, Return to Monkey Island, Obduction, Clive Barker's Undying, Rime.
 
 ---
 

@@ -115,9 +115,13 @@ QD-OLED panels have a triangular RGB subpixel layout rather than the standard ve
 
 For the mask to accurately represent the physical subpixel layout, the game must render at your display's native resolution with no supersampling or DSR. The triad pattern must map one virtual phosphor cell to one physical display pixel.
 
-Set **Triad Width = 2.0** for native 1:1 mapping. This is the minimum value where each cell in the shader's 2×2 tile pattern corresponds to a single physical pixel. Values above 2.0 (4.0, 6.0) scale up the pattern — useful for lower resolutions or to make the structure more visible, but no longer 1:1 with the physical panel.
+The correct Triad Width for 1:1 native mapping depends on your display resolution:
+- **4K display:** Triad Width = **1.0**
+- **5K display:** Triad Width = **1.5**
 
-If you can see the mask pattern clearly without any pixel grid effect, you are likely not at 1:1. At true 1:1 the mask is subtle and integrates with the image rather than sitting on top of it.
+The test for correct 1:1 alignment: set Mask Strength to 1.0 (100%). The image should go **black** — all phosphor gaps visible, no channel dominating. If the image appears predominantly green at full strength, the triad width is not at 1:1 and the pattern does not match your panel's physical subpixel layout.
+
+Values above the 1:1 setting scale up the pattern — useful for making the structure more visible or for lower-resolution sources, but no longer matching the physical panel.
 
 ---
 

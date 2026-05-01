@@ -371,7 +371,7 @@ The shader includes several preprocessor defines to trade quality for performanc
 | Change | Saving | Quality Impact |
 |---|---|---|
 | `HALATION_RESOLUTION=4` | High | None — halation is low frequency |
-| `GLOW_RESOLUTION=2` | High | None — glow is low frequency |
+| `GLOW_RESOLUTION=2` | High | None — glow is low frequency. **Note:** some games may show a ghost double-image artefact at GLOW_RESOLUTION > 1. Set to 1 if you see this |
 | `ENABLE_EDGE_BLUR=0` | Medium | Slight edge softness loss |
 | `ENABLE_PREBLUR=0` | Medium | Sharper source, less AA |
 | `ENABLE_PERSISTENCE=0` | Low | Remove persistence simulation |

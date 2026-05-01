@@ -73,6 +73,10 @@
 // Glow blur resolution divisor. Glow is a wide soft effect -- running at
 // reduced resolution is perceptually indistinguishable and saves significantly.
 // 1 = full resolution. 2 = half (recommended). 4 = quarter.
+//
+// NOTE: Some games (e.g. Cuphead) may show a ghost double-image or mini-screen
+// artefact when GLOW_RESOLUTION > 1. This is a game-specific interaction with
+// how the glow texture is composited. If you see this, set GLOW_RESOLUTION=1.
 #ifndef GLOW_RESOLUTION
     #define GLOW_RESOLUTION 2
 #endif

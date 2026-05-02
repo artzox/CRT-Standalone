@@ -49,8 +49,11 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `ENABLE_CONVERGENCE` | 1 | Convergence error simulation |
 | `ENABLE_VIGNETTE` | 1 | Vignette (edge darkening) |
 | `ENABLE_GRAIN` | 1 | Film grain |
+| `ENABLE_LIGHT_WARP` | 0 | Lightweight barrel/pincushion distortion (only active when ENABLE_GEOMETRY=0) |
+| `ENABLE_INTERLACE` | 0 | Interlaced field simulation — alternates scanline fields each frame |
+| `ENABLE_CORNER_ROUND` | 0 | Rounded screen corners with optional bezel border shadow |
 
-### Resolution Defines
+### Resolution / Quality Defines
 
 | Define | Default | Description |
 |---|---|---|
@@ -58,6 +61,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `GLOW_RESOLUTION` | 2 | Glow blur resolution divisor. 2=half res (recommended), 1=full |
 | `PREBLUR_RESOLUTION` | 1 | Pre-blur resolution. Keep at 1 — lower values visibly degrade quality |
 | `PREBLUR_FILTER` | 0 | Reconstruction filter for pre-blur and geometry warp sampling. 0=Lanczos2 (default, 4×4 taps), 1=Lanczos3 (6×6 taps, sharper, ~2× cost), 2=Catmull-Rom (4×4 taps, crispest edges at same cost as Lanczos2) |
+| `SCANLINE_REFERENCE_HEIGHT` | 0 | Resolution-independent scanline width. Set to your display's native vertical resolution (2160=4K, 2880=5K). When set, `crt_scanline_width` produces identical-looking scanlines at any render resolution. 0=disabled (default, preserves existing preset behaviour) |
 
 ### HDR / Pipeline
 
@@ -143,6 +147,12 @@ The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through
 - **Per-channel attack** — how much each channel contributes to the scanline modulation
 - **Beam Horizontal Bloom** — simulates electron beam horizontal spreading on very bright scanlines. On real CRTs, high-current beams (saturated whites) spread sideways due to space charge repulsion between electrons. Only active above ~70% luma, with full effect above 90%. 0.0 = off (default). 0.3–0.5 = subtle spreading on bright highlights
 
+### Interlace
+
+Requires `ENABLE_INTERLACE=1`. Simulates CRT interlaced mode by alternating which scanline fields are bright and dark each frame — matching how real interlaced CRTs displayed odd and even fields on alternate fields. Produces visible field-rate flicker, most noticeable at high framerates with BFI active.
+
+- **Interlace Strength** — 0.0 = no effect. 1.0 = full field blanking (dark rows go completely black on alternate frames). 0.3–0.5 = softer look. Automatically accounts for BFI cycle length so the field alternation stays in sync with lit frames
+
 ### Halation
 
 - **Strength** — overall halation intensity
@@ -194,7 +204,8 @@ Edge darkening.
 - **H Power** — falloff speed horizontally. In Circular mode, controls overall power
 - **V Power** — falloff speed vertically. No effect in Circular mode. Keep 1.0–2.5 in Rectangular mode to avoid a sliver effect
 - **Strength** — overall vignette intensity
-- **HDR Protection Threshold** — prevents vignette from crushing bright highlights
+- **Highlight Protection Threshold** — luminance above which highlights are progressively protected from vignette darkening
+- **Highlight Protection Strength** — how strongly highlights are protected. 0.0 = original behaviour (no protection). 1.0 = full protection: pixels at peak brightness receive zero vignette darkening. Use threshold to define where protection starts, strength to control how complete it is
 
 ### Film Grain
 - **Animate** — grain changes each frame (recommended)
@@ -202,7 +213,6 @@ Edge darkening.
 - **Intensity** — grain amplitude. 0.15–0.25 is typical. Higher values darken bright areas due to Poisson variance rolloff
 - **Shadows** — minimum grain level in shadow areas
 - **Grain Size** — diffusion spread of grain clusters. 0.2 = fine (default). Higher = larger organic clumps
-- **Temporal Grain Correlation** — blends a fraction of the previous frame's grain into static areas. Real film grain has temporal coherence — silver halide crystals are fixed on the film stock, so static scenes show consistent grain rather than re-randomised noise each frame. 0.0 = fully re-randomised (default). 0.3–0.5 = organic anchored feel on static areas. Requires ENABLE_DECAY=1
 
 ### Gamma & Contrast
 
@@ -286,7 +296,24 @@ Requires `ENABLE_GEOMETRY=1`. Screen curvature and zoom simulation.
 - **Curvature Strength** — how strongly the image is warped
 - **Zoom** — compensates for the zoom-out effect of curvature
 
-Note: geometry is implemented as UV remapping in the main CRT pass, not as a post-process warp. Vignette does not follow the curved boundary.
+Note: geometry is implemented as UV remapping in the main CRT pass. Glow and halation are composited through the warp for correct alignment. Use `ENABLE_LIGHT_WARP` for a cheaper alternative when full accuracy is not needed.
+
+### Light Warp
+
+Requires `ENABLE_LIGHT_WARP=1` and `ENABLE_GEOMETRY=0`. A lightweight barrel/pincushion distortion applied to the final image as a post-process — much cheaper than full geometry since no Lanczos reconstruction, glow correction, or multi-pass sampling is involved. The entire scene including scanlines and mask bends with the warp.
+
+- **Warp Strength** — positive = barrel distortion (image curves inward, CRT-like). Negative = pincushion. 0.1–0.3 = subtle CRT curve. 0.5+ = strong
+- **Warp Border Colour** — colour of the area outside the warped screen boundary. Black (default) = authentic CRT bezel look
+
+### Corner Rounding
+
+Requires `ENABLE_CORNER_ROUND=1`. Rounded screen mask with optional bezel border shadow, matching the approach used in CRT Guest Advanced.
+
+- **Corner Size** — radius of rounded corners. 0.0 = square. 0.05–0.10 = subtle. 0.15–0.25 = strong consumer TV rounding
+- **Border Size** — adds a darkened shadow along all four screen edges independently of corner rounding, simulating the bezel shadow cast by the CRT housing. 0.0 = no border. 0.5–1.0 = subtle edge shadow
+- **Border Intensity** — power curve applied to the corner/border mask. Higher = sharper, more contrasty edge. Lower = soft gradual transition. 2.0 = default (sharp)
+
+The mask is a luminance multiplier — it darkens toward the edges and corners rather than filling with a flat colour, giving a natural bezel appearance.
 
 ### Pipeline (Soop HDR Integration)
 

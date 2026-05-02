@@ -1,98 +1,92 @@
 # CRT-Standalone — Changelog
 
-## Current Version
+## Latest Update
+
+### New Features
+
+#### Lightweight Barrel Warp (`ENABLE_LIGHT_WARP=1`)
+Post-process barrel/pincushion distortion applied to the final image. Much cheaper than full geometry — no Lanczos reconstruction, no glow/halation correction passes. The entire scene including scanlines and mask bends with the warp. Only active when `ENABLE_GEOMETRY=0`. Controls: Warp Strength (positive=barrel, negative=pincushion) and Border Colour.
+
+#### Interlaced Field Simulation (`ENABLE_INTERLACE=1`)
+Simulates CRT interlaced mode by alternating which scanline rows are bright and dark each frame, matching real CRT field-based display. Implemented inside the scanline calculation so the actual dark gaps between scanlines move position rather than the whole image shifting. Automatically divides by the BFI cycle length (`crt_decay_frames`) so the field alternation stays in sync with lit frames. Most visible at high framerates with BFI active.
+
+#### Corner Rounding (`ENABLE_CORNER_ROUND=1`)
+Rounded screen mask based on the CRT Guest Advanced corner() function. Three controls: Corner Size (radius), Border Size (independent edge shadow on all four sides simulating bezel housing shadow), and Border Intensity (power curve controlling sharpness). The mask is a luminance multiplier — darkens toward edges and corners naturally, no flat bezel colour needed. No separate colour picker required.
+
+#### Scanline Resolution Independence (`SCANLINE_REFERENCE_HEIGHT`)
+New preprocessor define (default 0 = disabled). Set to your display's native vertical resolution (2160 for 4K, 2880 for 5K). When set, `crt_scanline_width` is automatically scaled proportionally to render resolution, so the same scanline width value produces identical-looking scanlines in every game regardless of their internal render resolution. Existing presets unaffected when disabled.
+
+---
+
+### Improvements
+
+#### Vignette HDR Protection — Reworked
+Replaced single threshold with two-slider system: **Highlight Protection Threshold** (where protection begins) and **Highlight Protection Strength** (0.0 = original behaviour, 1.0 = full isolation of highlights above threshold). The gate now applies before the strength lerp for consistent behaviour across both rectangular and circular vignette shapes.
+
+#### BFI/Pipeline Contrast Fix
+In `PIPELINE>=1`, the BCS contrast curve now decodes from sRGB to linear before `apply_bcs` and re-encodes after. Previously the Bezier curve operated on already-gamma-encoded values causing the internal `pow(Y, 1/2.4)` step to double-encode, producing different contrast behaviour in HDR mode vs SDR.
+
+#### Ping-Pong Textures for Luma Monitors
+`crt_decay_luma_lit_tex` and `crt_decay_luma_dark_tex` were being both read and written in the same pass, causing a D3D `X3020` error on some drivers. Fixed with dedicated `_prev_tex` copies updated each frame before the monitor update passes.
+
+---
+
+### Removed
+
+#### Temporal Grain Correlation
+Removed. The implementation produced grain elements that were too large and reduced image clarity even when technically functional. The grain system otherwise unchanged — per-frame Poisson noise with spatial diffusion via `crt_grain_size`.
+
+---
+
+### Compile Fixes
+
+- `FRAMECOUNT`, `CRT_TIMER`, and `CRT_FRAMETIME` were declared inside `#if ENABLE_GRAIN`. When `ENABLE_GRAIN=0` these were undefined but referenced by interlace, burn-in, and decay code. Moved to a system uniforms block that is always compiled in.
+- `crt_grain_raw_tex` self-sampling error: `GrainMerged` was writing to `crt_grain_raw_tex` (RenderTarget1) while the temporal grain code read from the same texture, triggering `X3020`. Fixed by removing temporal grain entirely.
+
+---
+
+## Previous Version
 
 ### New Features
 
 #### Dual-Scale Bloom
-A second, wider glow pass running at quarter resolution adds a broad soft halo over large bright areas (sky, windows, surfaces), complementing the tight per-element glow. Three new controls under Brightness & Glow: Wide Glow Strength (default 0.0 = off), Wide Glow Radius, Wide Glow Threshold. Very cheap — two additional passes at quarter resolution.
+Wide glow pass at half resolution adds broad area bloom complementing the tight per-element glow. Three controls under Brightness & Glow: Wide Glow Strength (default 0.0), Wide Glow Radius, Wide Glow Threshold.
 
 #### Spectral Bloom
-Physically based chromatic glow: blue light diffracts more than red through a lens aperture. The blue channel of the glow now blooms slightly wider than red (R=0.75×, G=1.0×, B=1.35× sigma) when Spectral Bloom > 0. Based on wavelength-dependent diffraction physics. Default 0.0 (uniform, original behaviour).
+Per-channel glow sigma: blue blooms wider than red (R=0.75×, G=1.0×, B=1.35×) based on wavelength-dependent diffraction. Controlled by Spectral Bloom slider (default 0.0 = uniform).
 
 #### Glow Soft Knee
-New Glow Knee slider (0.0–0.5, default 0.0) replaces the hard luminance threshold with a smoothstep fade-in. Above 0, dark pixels contribute progressively less to glow while bright pixels contribute fully — creating better contrast between lit and unlit areas. Works at Threshold=0. Suggested starting point: 0.1–0.3.
+Glow Knee slider replaces hard luminance threshold with smoothstep fade-in. Dark pixels contribute progressively less to glow. Works at Threshold=0.
 
 #### Halation Warmth
-New Halation Warmth slider (0.0–1.0, default 0.0) controls the colour temperature of the halo. At 1.0: warm orange-red tint matching real CRT phosphor backscatter. Works alongside Desaturation: desaturation removes colour, warmth tints what replaces it.
+Halation Warmth slider controls colour temperature of the halo — neutral white to warm orange-red matching real CRT phosphor backscatter.
 
 #### Moiré Dither
-New Mask Moiré Dither slider adds a small random sub-pixel phase offset per 16×16 tile, breaking the strict periodicity that causes moiré interference. Based on Haeberli & Segal (1990). Default 0.0 (off).
+Mask Moiré Dither adds random sub-pixel phase offset per 16×16 tile, breaking mask periodicity. Based on Haeberli & Segal (1990).
 
-#### Physics-Based Radial Misconvergence
-New Radial Misconvergence slider under Convergence. Implements the pincushion model Δy = k × x² — convergence error grows from zero at centre to maximum at horizontal edges, matching real CRT electron gun behaviour. Red diverges upward, blue downward. Added on top of existing uniform convergence offsets. Default 0.0 (off).
+#### Radial Misconvergence
+Convergence error grows toward screen edges following Δy = k × x² (pincushion model). Red diverges up, blue down at edges.
 
 #### Per-Channel Phosphor Persistence
-Three new sliders (Persistence R, G, B) allow independent decay rates per channel. Real P22 phosphors decay at different speeds: green longest (~2–3ms), red intermediate, blue fastest (~0.5ms). When any per-channel value is non-zero, they override the uniform Persistence Strength. Default 0.0 on all three (falls back to uniform).
+Persistence R/G/B sliders for independent decay rates. Real P22: green longest (~2–3ms), blue fastest (~0.5ms).
 
 #### Electron Beam Horizontal Bloom
-New Beam Horizontal Bloom slider under Scanlines. Simulates space charge spreading of the electron beam on very bright content — saturated whites appear slightly smeared horizontally on real CRTs. Applied via a 3-tap Gaussian only above ~70% luma, with full effect above 90%. Default 0.0 (off).
+Luminance-gated 3-tap horizontal Gaussian on very bright scanlines (>70% luma gate). Simulates space charge beam spreading.
 
-#### Temporal Grain Correlation
-New Temporal Grain Correlation slider under Film Grain. Real film grain has temporal coherence — silver halide crystals are fixed on the film stock. Static areas blend a fraction of the previous frame's grain, giving an anchored organic feel rather than fully re-randomised noise each frame. Moving areas always get fresh grain. Requires ENABLE_DECAY=1. Default 0.0 (off).
+### Phosphor Profile Overhaul
+All matrices recomputed from documented CIE xy chromaticity coordinates. Two new profiles: NTSC 1953 (Illuminant C) and NTSC 1953 D93 (Japanese ~9300K). Philips merged into SMPTE-C (identical chromaticities). Gamma corrected from hardcoded 2.2 to proper sRGB piecewise TRC. `ENABLE_PHOSPHOR` defaults to 1.
 
----
+**Profile index order changed** — check presets after updating.
 
-### Phosphor Profile System — Overhauled
+### Preprocessor Gates
+New defines with UI hiding: `ENABLE_CA`, `ENABLE_CONVERGENCE`, `ENABLE_VIGNETTE`, `ENABLE_GRAIN`, `ENABLE_PREBLUR`, `ENABLE_HALATION`, `ENABLE_EDGE_BLUR`.
 
-All phosphor matrices recomputed from documented CIE xy chromaticity coordinates using the standard derivation method. Previous P22 and Trinitron matrices were incorrect.
-
-**Profile index order changed.** Check your preset after loading.
-
-| Index | Profile |
-|---|---|
-| 0 | EBU (PAL) |
-| 1 | P22 (US consumer) |
-| 2 | SMPTE-C / Sony BVM-D / Philips (identical chromaticities — merged) |
-| 3 | Sony Trinitron |
-| 4 | NTSC 1953 (Illuminant C) — new |
-| 5 | NTSC 1953 D93 Japanese (~9300K) — new |
-
-- Gamma decode/encode corrected from hardcoded pow(x, 2.2) to proper sRGB piecewise TRC
-- ENABLE_PHOSPHOR now defaults to 1 (was 0 — uniforms were hidden and feature was inactive)
-
----
-
-### Algorithm Quality Improvements
-
-- **CAS sharpening** — upgraded to 8-neighbour min/max for the contrast estimate. Diagonal neighbours (NE/NW/SE/SW) now used for contrast calculation, not just N/S/E/W. More accurate on diagonal edges
-- **Reconstruction filter** — `PREBLUR_FILTER` preprocessor define selects between Lanczos2 (0, default), Lanczos3 (1), and Catmull-Rom (2) for pre-blur and geometry warp centre-tap sampling
-- **Phosphor persistence** — trail blend now done in linear light (gamma-correct)
-
----
-
-### Preprocessor Gates — New Defines
-
-UI categories now hide when their feature is disabled:
-
-| Define | Default |
-|---|---|
-| `ENABLE_CA` | 1 |
-| `ENABLE_CONVERGENCE` | 1 |
-| `ENABLE_VIGNETTE` | 1 |
-| `ENABLE_GRAIN` | 1 |
-| `ENABLE_PREBLUR` | 1 |
-| `ENABLE_HALATION` | 1 |
-| `ENABLE_EDGE_BLUR` | 1 |
-
----
+### Reconstruction Filter
+`PREBLUR_FILTER` selects between Lanczos2 (0), Lanczos3 (1), Catmull-Rom (2) for pre-blur and geometry warp sampling.
 
 ### Optimisation
-
-- Glow H and V passes run at configurable reduced resolution (`GLOW_RESOLUTION=2` default = half res)
-- Phosphor decay history stores merged from 3 passes to 2 (dual-output pass)
-- Compute grain dead code removed (~267 lines)
-- No-preblur + no-geometry path uses plain bilinear sampling — restored correct performance (previous version accidentally used Lanczos in blur loops when preblur was off, costing ~10fps)
-
----
+No-preblur + no-geometry path restored to plain bilinear (Lanczos was accidentally used in blur loops, costing ~10fps). Glow and halation blur passes use correct sampling paths per pipeline.
 
 ### Compute Grain Removed
-
-All `#if ENABLE_GRAIN_COMPUTE` dead code blocks removed. The compute grain path was non-functional. Standard Gaussian grain path unaffected.
-
----
-
-### Motion-Adaptive Sharpening
-
-`ENABLE_MOTION_SHARPEN=1` adds a separate CAS pass using frame-to-frame luma difference as a motion mask. Moving regions get stronger sharpening, static areas less. Requires ENABLE_DECAY=1. Off by default.
+~267 lines of dead `#if ENABLE_GRAIN_COMPUTE` code removed.
 

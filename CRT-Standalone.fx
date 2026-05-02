@@ -81,6 +81,45 @@
     #define GLOW_RESOLUTION 2
 #endif
 
+// Scanline reference height for resolution-independent scanline width.
+// When set, crt_scanline_width is automatically scaled so scanlines look
+// identical regardless of the game's render resolution.
+//
+// Set this to your display's native vertical resolution:
+//   4K display:  SCANLINE_REFERENCE_HEIGHT = 2160
+//   5K display:  SCANLINE_REFERENCE_HEIGHT = 2880
+//   1440p:       SCANLINE_REFERENCE_HEIGHT = 1440
+//   1080p:       SCANLINE_REFERENCE_HEIGHT = 1080
+//
+// 0 = disabled (default). Existing behaviour -- scanline width is in raw
+//     pixels at render resolution. Existing presets are unaffected.
+#ifndef SCANLINE_REFERENCE_HEIGHT
+    #define SCANLINE_REFERENCE_HEIGHT 0
+#endif
+
+// Lightweight barrel/pincushion warp pass.
+// A cheap post-process UV distortion applied to the final image.
+// Only active when ENABLE_GEOMETRY=0 -- use full geometry for accurate warp.
+// 1 = enabled, 0 = disabled (default).
+#ifndef ENABLE_LIGHT_WARP
+    #define ENABLE_LIGHT_WARP 0
+#endif
+
+// Interlaced scanline phase pass.
+// Offsets the scanline grid by half a line every other frame, simulating
+// real CRT interlaced mode. Most visible at high framerates with BFI.
+// 1 = enabled, 0 = disabled (default).
+#ifndef ENABLE_INTERLACE
+    #define ENABLE_INTERLACE 0
+#endif
+
+// Corner rounding / bezel pass.
+// Applies a rounded screen mask with optional edge darkening.
+// 1 = enabled, 0 = disabled (default).
+#ifndef ENABLE_CORNER_ROUND
+    #define ENABLE_CORNER_ROUND 0
+#endif
+
 
 // Edge Blur
 #ifndef ENABLE_EDGE_BLUR
@@ -222,6 +261,11 @@
 #ifndef LINEAR_HDR_PEAK_NITS
     #define LINEAR_HDR_PEAK_NITS 1400
 #endif
+
+// System uniforms -- always present regardless of feature flags
+uniform uint  FRAMECOUNT    < source = "framecount"; >;
+uniform float CRT_TIMER     < source = "timer"; >;       // milliseconds since start
+uniform float CRT_FRAMETIME < source = "frametime"; >;   // actual ms elapsed this frame
 
 // ============================================================
 // Uniforms -- Pre-blur (equivalent to Guest SIZEH/SIZEV/SIGMA)
@@ -603,6 +647,22 @@ uniform float crt_scanline_sigma <
 > = 0.4;
 
 // ============================================================
+// Uniforms -- Interlace
+// ============================================================
+
+#if ENABLE_INTERLACE
+uniform float crt_interlace_strength <
+    ui_type = "drag"; ui_label = "Interlace Strength";
+    ui_category = "Interlace";
+    ui_tooltip = "Simulates CRT interlaced mode by alternating which scanline\n"
+                 "fields are bright and dark each frame.\n"
+                 "Most visible at high framerates with BFI enabled.\n"
+                 "0.0 = no effect. 1.0 = full field blanking alternation.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 0.0;
+#endif
+
+// ============================================================
 // Uniforms -- Gamma & Contrast
 // ============================================================
 
@@ -742,6 +802,28 @@ uniform float crt_geom_zoom <
                  "1.05-1.1 is typically enough to hide the edge clamping.";
     ui_min = 0.5; ui_max = 2.0; ui_step = 0.005;
 > = 1.0;
+#endif
+
+// ============================================================
+// Uniforms -- Light Warp
+// ============================================================
+
+#if ENABLE_LIGHT_WARP && !ENABLE_GEOMETRY
+uniform float crt_warp_strength <
+    ui_type = "drag"; ui_label = "Warp Strength";
+    ui_category = "Light Warp";
+    ui_tooltip = "Lightweight barrel distortion applied to the final image.\n"
+                 "Positive = barrel (CRT curve inward). Negative = pincushion.\n"
+                 "0.1-0.3 = subtle CRT curve. 0.5+ = strong distortion.\n"
+                 "Only active when ENABLE_GEOMETRY=0.";
+    ui_min = -0.5; ui_max = 0.5; ui_step = 0.01;
+> = 0.0;
+
+uniform float3 crt_warp_border_colour <
+    ui_type = "color"; ui_label = "Warp Border Colour";
+    ui_category = "Light Warp";
+    ui_tooltip = "Colour outside the warped screen boundary. Black = authentic CRT.";
+> = float3(0.0, 0.0, 0.0);
 #endif
 
 // ============================================================
@@ -1087,16 +1169,60 @@ uniform float crt_vignette_v_power <
 > = 1.5;
 
 uniform float crt_vignette_hdr_threshold <
-    ui_type = "drag"; ui_label = "Vignette HDR Protection Threshold";
+    ui_type = "drag"; ui_label = "Highlight Protection Threshold";
     ui_category = "Vignette";
-    ui_tooltip = "Pixels brighter than this are progressively protected from vignetting.\n"
+    ui_tooltip = "Luminance above which highlights are progressively protected.\n"
+                 "Pixels brighter than this start receiving less vignette darkening.\n"
                  "0.5 = protect upper midtones and highlights.\n"
-                 "0.8 = only protect bright HDR highlights.\n"
-                 "1.0 = no protection (affects everything equally).\n"
-                 "Prevents vignette from crushing HDR content at screen edges.";
+                 "0.7 = only protect bright highlights.\n"
+                 "1.0 = no protection (vignette affects everything equally).";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
+
+uniform float crt_vignette_hdr_strength <
+    ui_type = "drag"; ui_label = "Highlight Protection Strength";
+    ui_category = "Vignette";
+    ui_tooltip = "How strongly highlights above the threshold are protected.\n"
+                 "0.0 = no protection (original behaviour).\n"
+                 "0.5 = partial protection -- highlights still darkened but less so.\n"
+                 "1.0 = full protection -- highlights above threshold fully isolated.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
 #endif // ENABLE_VIGNETTE
+
+// ============================================================
+// Uniforms -- Corner Rounding
+// ============================================================
+
+#if ENABLE_CORNER_ROUND
+uniform float crt_corner_size <
+    ui_type = "drag"; ui_label = "Corner Size";
+    ui_category = "Corner Rounding";
+    ui_tooltip = "Radius of the rounded screen corners.\n"
+                 "0.0 = square corners. 0.05-0.10 = subtle rounding.\n"
+                 "0.15-0.25 = strong rounded corners like a consumer TV.";
+    ui_min = 0.0; ui_max = 0.35; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_corner_border <
+    ui_type = "drag"; ui_label = "Border Size";
+    ui_category = "Corner Rounding";
+    ui_tooltip = "Adds a darkened shadow border around all four edges of the screen,\n"
+                 "simulating the bezel shadow cast by the CRT housing.\n"
+                 "0.0 = no border. 0.5-1.0 = subtle edge shadow. 2.0 = strong bezel.";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_corner_intensity <
+    ui_type = "drag"; ui_label = "Border Intensity";
+    ui_category = "Corner Rounding";
+    ui_tooltip = "Power curve applied to the corner/border mask.\n"
+                 "Higher = sharper, harder edge with more contrast.\n"
+                 "Lower = softer, more gradual transition.\n"
+                 "0.25 = very soft. 1.0 = linear. 2.0 = sharp (default).";
+    ui_min = 0.25; ui_max = 4.0; ui_step = 0.05;
+> = 2.0;
+#endif
 
 // ============================================================
 // Uniforms -- Edge Blur
@@ -1153,22 +1279,6 @@ uniform bool crt_grain_animate <
     ui_category = "Film Grain";
 > = true;
 
-uniform float crt_grain_temporal <
-    ui_type = "drag"; ui_label = "Temporal Grain Correlation";
-    ui_category = "Film Grain";
-    ui_tooltip = "Blends a fraction of the previous frame grain into static areas.\n"
-                 "Real film grain has temporal correlation -- the same silver halide\n"
-                 "crystals sit in fixed positions, so static scenes show the same\n"
-                 "grain pattern rather than fully re-randomised noise each frame.\n"
-                 "\n"
-                 "0.0 = fully re-randomised every frame (original behaviour).\n"
-                 "0.3-0.5 = organic anchored feel on static areas.\n"
-                 "1.0 = grain freezes completely on static areas.\n"
-                 "\n"
-                 "Moving areas always get fresh grain regardless of this setting.\n"
-                 "Requires ENABLE_DECAY=1 for the reference frame.";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.0;
 
 uniform float crt_grain_shadows <
     ui_type = "drag"; ui_label = "Shadow Grain Amount";
@@ -1187,11 +1297,6 @@ uniform float crt_grain_size <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.2;
 
-// Analog film grain parameters (compute shader path only)
-
-uniform uint  FRAMECOUNT < source = "framecount"; >;
-uniform float CRT_TIMER     < source = "timer"; >;       // milliseconds since start
-uniform float CRT_FRAMETIME < source = "frametime"; >;   // actual ms elapsed this frame
 #endif // ENABLE_GRAIN
 
 // ============================================================
@@ -1522,7 +1627,6 @@ uniform bool crt_decay_tube_pos <
 
 // -- Phosphor Decay - Variable MPRT only ---------------------
 
-// ============================================================
 // Uniforms -- Pipeline (Soop integration)
 // Only relevant when PIPELINE=1 (scRGB) or PIPELINE=2 (HDR10)
 // ============================================================
@@ -1662,10 +1766,16 @@ texture2D crt_decay_phase_tex < pooled = false; >
 sampler2D crt_decay_phase_sampler { Texture = crt_decay_phase_tex; };
 
 // Auto-resync luminance monitor: two 1x1 textures for lit and dark frame EMA.
+// Luma monitor: ping-pong textures so the PS can read previous frame
+// while writing current frame (avoids same-pass read/write error).
 texture2D crt_decay_luma_lit_tex  < pooled = false; > { Width=1; Height=1; Format=R16F; };
 texture2D crt_decay_luma_dark_tex < pooled = false; > { Width=1; Height=1; Format=R16F; };
-sampler2D crt_decay_luma_lit_sampler  { Texture=crt_decay_luma_lit_tex;  MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
-sampler2D crt_decay_luma_dark_sampler { Texture=crt_decay_luma_dark_tex; MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
+texture2D crt_decay_luma_lit_prev_tex  < pooled = false; > { Width=1; Height=1; Format=R16F; };
+texture2D crt_decay_luma_dark_prev_tex < pooled = false; > { Width=1; Height=1; Format=R16F; };
+sampler2D crt_decay_luma_lit_sampler      { Texture=crt_decay_luma_lit_tex;       MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
+sampler2D crt_decay_luma_dark_sampler     { Texture=crt_decay_luma_dark_tex;      MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
+sampler2D crt_decay_luma_lit_prev_samp    { Texture=crt_decay_luma_lit_prev_tex;  MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
+sampler2D crt_decay_luma_dark_prev_samp   { Texture=crt_decay_luma_dark_prev_tex; MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
 
 // Variable MPRT: two history frames for brightness budget
 texture2D crt_decay_prev1_tex < pooled = false; >
@@ -1712,7 +1822,6 @@ sampler2D crt_persistence_samp
 
 #if ENABLE_GRAIN
 // Grain delta texture: stores (grained - original) delta only
-// Diffusion blurs this delta then adds it to the clean image
 texture2D crt_grain_raw_tex < pooled = false; >
 {
     Width  = BUFFER_WIDTH;
@@ -1720,6 +1829,7 @@ texture2D crt_grain_raw_tex < pooled = false; >
     Format = RGBA16F;
 };
 sampler2D crt_grain_raw_samp { Texture = crt_grain_raw_tex; };
+
 
 // Pre-grain snapshot: clean backbuffer before grain is applied
 texture2D crt_pregrain_tex < pooled = false; >
@@ -3027,8 +3137,19 @@ void crt_main_PS(
         c = apply_colour_temp(c, crt_colour_temp);
 
     // -- BCS (Megatron Bezier in Yxy, no washout) --
+    // In PIPELINE >= 1 the soop sandwich re-encodes to sRGB before this point.
+    // apply_bcs expects a linear-ish input -- decode to linear first, then
+    // re-encode after so the Bezier curve operates in the correct domain.
     if (abs(crt_brightness)>0.001 || abs(crt_contrast)>0.001 || abs(crt_saturation)>0.001)
+    {
+        #if PIPELINE >= 1
+        float3 c_bcs_lin = to_linear(max(c, 0.0));
+        c_bcs_lin = apply_bcs(c_bcs_lin, crt_brightness, crt_contrast, crt_saturation);
+        c = from_linear(max(c_bcs_lin, 0.0));
+        #else
         c = apply_bcs(c, crt_brightness, crt_contrast, crt_saturation);
+        #endif
+    }
 
     // -- CRT gamma decode --
     float3 c_lin = crt_to_linear(c);
@@ -3055,9 +3176,24 @@ void crt_main_PS(
     // No vertical burn-in offset applied -- any vertical shift changes brightness
     // because frac() maps non-linearly to the gaussian beam profile.
     // Horizontal mask shift (phase_h + orbit_h) handles burn-in protection instead.
+    // Resolution-independent scanline width.
+    // When SCANLINE_REFERENCE_HEIGHT > 0, scale width proportionally so
+    // the same crt_scanline_width value produces identical-looking scanlines
+    // at any render resolution.
+    #if SCANLINE_REFERENCE_HEIGHT > 0
+    float scan_width = crt_scanline_width *
+                       (float(BUFFER_HEIGHT) / float(SCANLINE_REFERENCE_HEIGHT));
+    #else
+    float scan_width = crt_scanline_width;
+    #endif
+
+    // Interlace: shift scanline phase by half a scanline width every other frame.
+    // Alternates which rows are bright/dark, simulating CRT interlaced mode.
+    // Applied here (to the scanline period) not as a UV shift, so the actual
+    // dark gaps between scanlines move position rather than the whole image shifting.
     float scanline_y = fc.y;
-    float f  = frac(scanline_y / crt_scanline_width) - 0.5;
-    float fw = fwidth(scanline_y / crt_scanline_width);
+    float f  = frac(scanline_y / scan_width) - 0.5;
+    float fw = fwidth(scanline_y / scan_width);
     float fa = f - fw * 0.5;
     float fb = f + fw * 0.5;
     float da = abs(fa) * 2.0;
@@ -3083,6 +3219,40 @@ void crt_main_PS(
     #endif
 
     c_lin *= lerp(1.0, float3(beam_r, beam_g, beam_b), crt_scanline_strength);
+
+    // -- Interlaced field blanking --
+    // Alternate between odd and even scanline fields each frame, matching
+    // how real CRT interlacing works: one field of scanlines is bright,
+    // the other is dark, alternating every frame to create field-rate flicker.
+    //
+    // Blanking operates on scanline periods (not pixels) so it works correctly
+    // at any scanline width. Uses the same scan_width as the scanline calculation.
+    #if ENABLE_INTERLACE
+    if (crt_interlace_strength > 0.001)
+    {
+        // Which field is this frame: 0 or 1, alternates every frame.
+        // When BFI/decay is active, FRAMECOUNT increments every frame including
+        // dark frames -- so lit frames may always land on even or odd FRAMECOUNT.
+        // Divide by BFI cycle length so the field alternates per lit frame pair.
+        #if ENABLE_DECAY
+        uint  frame_field  = (FRAMECOUNT / uint(max(crt_decay_frames, 2))) & 1u;
+        #else
+        uint  frame_field  = FRAMECOUNT & 1u;
+        #endif
+
+        // Which scanline period does this pixel belong to: even or odd.
+        // Snap scan_width to nearest integer so periods are whole pixels --
+        // non-integer widths cause drift in the alternating pattern.
+        float snap_width   = max(round(scan_width), 1.0);
+        uint  scanline_idx = uint(fc.y / snap_width);
+        uint  scan_field   = scanline_idx & 1u;
+
+        // gate=1: full brightness (this field's scanline). gate=0: dimmed.
+        float gate = (scan_field == frame_field) ? 1.0 : 0.0;
+        float dim  = lerp(1.0, gate, crt_interlace_strength);
+        c_lin *= dim;
+    }
+    #endif
 
     // -- Electron beam horizontal bloom --
     // On real CRTs, high-current beams (bright content) spread horizontally
@@ -3158,13 +3328,17 @@ void crt_main_PS(
             float vig_v = pow(saturate(1.0 - abs(uv_c.y)), crt_vignette_v_power);
             vig = vig_h * vig_v;
         }
-        vig = lerp(1.0, vig, crt_vignette_strength);
-
-        // HDR gate: fade vignette out for bright pixels
+        // Highlight protection: pixels above threshold are progressively lifted
+        // toward no-vignette. Strength controls maximum protection at threshold.
         float vig_luma = dot(c, float3(0.2126, 0.7152, 0.0722));
-        float vig_gate = 1.0 - saturate((vig_luma - crt_vignette_hdr_threshold) /
-                                         max(1.0 - crt_vignette_hdr_threshold, 0.001));
-        c *= lerp(1.0, vig, vig_gate);
+        float protect  = saturate((vig_luma - crt_vignette_hdr_threshold) /
+                                   max(1.0 - crt_vignette_hdr_threshold, 0.001));
+        // protect=0 below threshold (full vig), =1 at peak brightness
+        // Scale by strength so user controls maximum protection level
+        float vig_gate = 1.0 - protect * crt_vignette_hdr_strength;
+        vig = lerp(1.0, vig, vig_gate);
+        vig = lerp(1.0, vig, crt_vignette_strength);
+        c *= vig;
     }
     #endif // ENABLE_VIGNETTE
 
@@ -3328,21 +3502,6 @@ void crt_grain_merged_PS(
     // Real film grain has temporal coherence -- the silver halide crystals are
     // physically fixed on the film stock, so static scenes see consistent grain.
     // Motion mask from prev1_tex: large difference = motion = fresh grain.
-    #if ENABLE_DECAY
-    if (crt_grain_temporal > 0.001 && crt_grain_animate)
-    {
-        float3 prev_c     = tex2D(crt_decay_prev1_sampler, texcoord).rgb;
-        float  motion_mag = length(c - prev_c);
-        // Normalise: 0.05 luma diff = fully dynamic, 0.01 = static
-        float  motion     = saturate((motion_mag - 0.01) / 0.04);
-        // Prev grain delta from raw texture (the grain that was applied last frame)
-        float3 prev_delta = tex2D(crt_grain_raw_samp, texcoord).rgb;
-        // On static areas: blend toward previous grain. On moving areas: fresh grain.
-        float  static_blend = crt_grain_temporal * (1.0 - motion);
-        delta = lerp(delta, prev_delta, static_blend);
-    }
-    #endif
-
     out_delta = float4(delta, 1.0);
 }
 
@@ -3832,6 +3991,14 @@ float crt_decay_sample_luma()
 }
 
 // Lit frame EMA monitor: only updates when frame_in_cycle == 0
+void crt_decay_luma_lit_copy_PS(
+    in  float4 pos : SV_Position, in float2 tc : TEXCOORD0,
+    out float4 col : SV_Target) { col = tex2D(crt_decay_luma_lit_sampler, tc); }
+
+void crt_decay_luma_dark_copy_PS(
+    in  float4 pos : SV_Position, in float2 tc : TEXCOORD0,
+    out float4 col : SV_Target) { col = tex2D(crt_decay_luma_dark_sampler, tc); }
+
 void crt_decay_luma_lit_PS(
     in  float4 position : SV_Position,
     in  float2 texcoord : TEXCOORD0,
@@ -3840,7 +4007,7 @@ void crt_decay_luma_lit_PS(
     int frames        = max(crt_decay_frames, 2);
     float4 phase_data = tex2D(crt_decay_phase_sampler, float2(0.5, 0.5));
     int    fic        = int(round(phase_data.r * 255.0)) % frames;
-    float  prev       = tex2D(crt_decay_luma_lit_sampler, float2(0.5, 0.5)).r;
+    float  prev       = tex2D(crt_decay_luma_lit_prev_samp, float2(0.5, 0.5)).r;
     if (fic == 0)
         color = float4(lerp(prev, crt_decay_sample_luma(), 0.05), 0.0, 0.0, 1.0);
     else
@@ -3856,7 +4023,7 @@ void crt_decay_luma_dark_PS(
     int frames        = max(crt_decay_frames, 2);
     float4 phase_data = tex2D(crt_decay_phase_sampler, float2(0.5, 0.5));
     int    fic        = int(round(phase_data.r * 255.0)) % frames;
-    float  prev       = tex2D(crt_decay_luma_dark_sampler, float2(0.5, 0.5)).r;
+    float  prev       = tex2D(crt_decay_luma_dark_prev_samp, float2(0.5, 0.5)).r;
     if (fic != 0)
         color = float4(lerp(prev, crt_decay_sample_luma(), 0.05), 0.0, 0.0, 1.0);
     else
@@ -4208,6 +4375,94 @@ void crt_decay_PS(
 // Technique
 // ============================================================
 
+// ============================================================
+// Light Warp pass
+// ============================================================
+#if ENABLE_LIGHT_WARP && !ENABLE_GEOMETRY
+void crt_light_warp_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    if (abs(crt_warp_strength) < 0.001)
+    {
+        color = tex2D(ReShade::BackBuffer, texcoord);
+        return;
+    }
+    float ar   = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
+    float2 uv  = texcoord - 0.5;
+    uv.x      *= ar;
+    float  r2  = dot(uv, uv);
+    uv        *= 1.0 + crt_warp_strength * r2;
+    uv.x      /= ar;
+    uv        += 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
+        color = float4(crt_warp_border_colour, 1.0);
+    else
+        color = tex2D(ReShade::BackBuffer, uv);
+}
+#endif
+
+
+
+// ============================================================
+// Corner rounding pass
+// Based on Guest Advanced corner() function -- multiplier approach
+// that darkens edges/corners rather than filling with a flat colour.
+// Three parameters: corner size, border shadow, intensity power curve.
+// ============================================================
+#if ENABLE_CORNER_ROUND
+float crt_corner_mask(float2 texcoord)
+{
+    float ar  = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
+    float2 aspect = float2(1.0, ar);
+
+    // Remap texcoord to [0,1] centred, then take absolute value -> [0, 0.5]
+    float2 pos = abs(2.0 * (texcoord - 0.5));
+
+    // Border: adds uniform edge shadow on all four sides
+    float b = crt_corner_border * 0.05 + 0.0005;
+    // Aspect-correct the vertical border contribution
+    pos.y = pos.y + b * (aspect.y - 1.0);
+
+    // Corner radius: must be at least as large as border to avoid artefacts
+    float2 crn = max(crt_corner_size.xx, 2.0 * b + 0.0015);
+
+    // Distance into corner region (aspect corrected)
+    float2 crp = max(pos - (1.0 - crn * aspect), 0.0) / aspect;
+    float  cd  = sqrt(dot(crp, crp));
+
+    // Blend the corner geometry into the position
+    pos = max(pos, 1.0 - crn + cd);
+
+    // Smooth mask: 1.0 inside, 0.0 outside, with border transition
+    float res = lerp(1.0, 0.0, smoothstep(1.0 - b, 1.0, sqrt(max(pos.x, pos.y))));
+
+    // Power curve controls sharpness of the edge/corner
+    return pow(res, crt_corner_intensity);
+}
+
+void crt_corner_round_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float3 screen = tex2D(ReShade::BackBuffer, texcoord).rgb;
+
+    if (crt_corner_size < 0.001 && crt_corner_border < 0.001)
+    {
+        color = float4(screen, 1.0);
+        return;
+    }
+
+    float mask = crt_corner_mask(texcoord);
+    // Multiply the image by the mask -- darkens edges/corners, black outside
+    color = float4(screen * mask, 1.0);
+}
+#endif
+
+// ============================================================
+
 technique CRT_Standalone <
     ui_label = "CRT Standalone";
     ui_tooltip = "Pre-blur (H+V) + mask + Megatron beam + gamma + brightboost + glow + grain.";
@@ -4362,6 +4617,18 @@ technique CRT_Standalone <
         PixelShader  = crt_decay_PS;
     }
     // Auto-resync luminance monitors (run after decay, before next phase store)
+    pass LumaMonitorLitCopy
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_luma_lit_copy_PS;
+        RenderTarget = crt_decay_luma_lit_prev_tex;
+    }
+    pass LumaMonitorDarkCopy
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_luma_dark_copy_PS;
+        RenderTarget = crt_decay_luma_dark_prev_tex;
+    }
     pass LumaMonitorLit
     {
         VertexShader = PostProcessVS;
@@ -4380,6 +4647,21 @@ technique CRT_Standalone <
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_soop_after_PS;
+    }
+    #endif
+    #if ENABLE_LIGHT_WARP && !ENABLE_GEOMETRY
+    pass LightWarp
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_light_warp_PS;
+    }
+    #endif
+
+    #if ENABLE_CORNER_ROUND
+    pass CornerRound
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_corner_round_PS;
     }
     #endif
 }

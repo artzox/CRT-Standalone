@@ -81,6 +81,12 @@
     #define GLOW_RESOLUTION 2
 #endif
 
+// Hum bars (AC interference simulation)
+// 1 = enabled, 0 = disabled (default)
+#ifndef ENABLE_HUM_BARS
+    #define ENABLE_HUM_BARS 0
+#endif
+
 // Scanline reference height for resolution-independent scanline width.
 // When set, crt_scanline_width is automatically scaled so scanlines look
 // identical regardless of the game's render resolution.
@@ -808,14 +814,14 @@ uniform float crt_geom_zoom <
 // Uniforms -- Light Warp
 // ============================================================
 
-#if ENABLE_LIGHT_WARP && !ENABLE_GEOMETRY
+#if ENABLE_LIGHT_WARP
 uniform float crt_warp_strength <
     ui_type = "drag"; ui_label = "Warp Strength";
     ui_category = "Light Warp";
     ui_tooltip = "Lightweight barrel distortion applied to the final image.\n"
                  "Positive = barrel (CRT curve inward). Negative = pincushion.\n"
                  "0.1-0.3 = subtle CRT curve. 0.5+ = strong distortion.\n"
-                 "Only active when ENABLE_GEOMETRY=0.";
+                 "Can be combined with ENABLE_GEOMETRY for stacked warp effects.";
     ui_min = -0.5; ui_max = 0.5; ui_step = 0.01;
 > = 0.0;
 
@@ -824,6 +830,18 @@ uniform float3 crt_warp_border_colour <
     ui_category = "Light Warp";
     ui_tooltip = "Colour outside the warped screen boundary. Black = authentic CRT.";
 > = float3(0.0, 0.0, 0.0);
+
+uniform float crt_pin_phase <
+    ui_type = "drag"; ui_label = "Pin Phase";
+    ui_category = "Light Warp";
+    ui_tooltip = "Horizontal scan linearity error -- horizontal position varies with\n"
+                 "vertical scan position. Based on Sony Megatron.\n"
+                 "Models CRT deflection yoke geometry where horizontal linearity\n"
+                 "changes with vertical deflection angle.\n"
+                 "Positive = pincushion. Negative = barrel.\n"
+                 "0.0 = disabled (default). 0.02-0.05 = subtle. 0.1+ = strong.";
+    ui_min = -0.2; ui_max = 0.2; ui_step = 0.005;
+> = 0.0;
 #endif
 
 // ============================================================
@@ -1099,6 +1117,23 @@ uniform float crt_convergence_b <
     ui_min = -4.0; ui_max = 4.0; ui_step = 0.01;
 > = 0.0;
 
+uniform float crt_convergence_h_r <
+    ui_type = "drag"; ui_label = "Red Horizontal Convergence";
+    ui_category = "Convergence";
+    ui_tooltip = "Horizontal offset of the red channel in pixels.\n"
+                 "Negative = left, positive = right.\n"
+                 "Complements vertical convergence and radial CA.";
+    ui_min = -3.0; ui_max = 3.0; ui_step = 0.1;
+> = 0.0;
+
+uniform float crt_convergence_h_b <
+    ui_type = "drag"; ui_label = "Blue Horizontal Convergence";
+    ui_category = "Convergence";
+    ui_tooltip = "Horizontal offset of the blue channel in pixels.\n"
+                 "Negative = left, positive = right.";
+    ui_min = -3.0; ui_max = 3.0; ui_step = 0.1;
+> = 0.0;
+
 uniform float crt_convergence_radial <
     ui_type = "drag"; ui_label = "Radial Misconvergence";
     ui_category = "Convergence";
@@ -1257,6 +1292,30 @@ uniform float crt_edge_blur_radius <
 > = 3.0;
 
 #endif // ENABLE_EDGE_BLUR
+
+// ============================================================
+// Uniforms -- Hum Bars
+// ============================================================
+
+#if ENABLE_HUM_BARS
+uniform float crt_hum_intensity <
+    ui_type = "drag"; ui_label = "Hum Bar Intensity";
+    ui_category = "Hum Bars";
+    ui_tooltip = "Simulates AC interference (hum bars) -- a slow-moving brightness\n"
+                 "gradient caused by 50/60Hz electrical interference in poorly\n"
+                 "shielded CRTs. Common in PAL sets and older consumer hardware.\n"
+                 "0.0 = disabled (default). Positive = dark band. Negative = bright band.\n"
+                 "0.1-0.2 = subtle. 0.5+ = strong visible banding.";
+    ui_min = -1.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_hum_speed <
+    ui_type = "drag"; ui_label = "Hum Bar Speed";
+    ui_category = "Hum Bars";
+    ui_tooltip = "Scroll speed of the hum bar. 50 = typical 50Hz PAL. 60 = 60Hz NTSC.";
+    ui_min = 1.0; ui_max = 200.0; ui_step = 1.0;
+> = 50.0;
+#endif // ENABLE_HUM_BARS
 
 // ============================================================
 #if ENABLE_GRAIN
@@ -3073,9 +3132,12 @@ void crt_main_PS(
     float  cx          = (texcoord.x - 0.5) * 2.0; // [-1, 1]
     float  ar          = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
     float  radial_err  = crt_convergence_radial * cx * cx * ar * ReShade::PixelSize.y;
-    float2 uv_r = texcoord + float2(0.0, (crt_convergence_r - radial_err) * ReShade::PixelSize.y) + ca_r;
+    // Horizontal convergence: independent per-channel X offset
+    float2 h_r = float2(crt_convergence_h_r * ReShade::PixelSize.x, 0.0);
+    float2 h_b = float2(crt_convergence_h_b * ReShade::PixelSize.x, 0.0);
+    float2 uv_r = texcoord + float2(0.0, (crt_convergence_r - radial_err) * ReShade::PixelSize.y) + ca_r + h_r;
     float2 uv_g = texcoord + float2(0.0,  crt_convergence_g               * ReShade::PixelSize.y);
-    float2 uv_b = texcoord + float2(0.0, (crt_convergence_b + radial_err) * ReShade::PixelSize.y) + ca_b;
+    float2 uv_b = texcoord + float2(0.0, (crt_convergence_b + radial_err) * ReShade::PixelSize.y) + ca_b + h_b;
     #else
     float2 uv_r = texcoord + ca_r;
     float2 uv_g = texcoord;
@@ -3359,6 +3421,18 @@ void crt_main_PS(
         c += halo * gate * crt_halation_strength;
     }
     #endif
+
+    // -- Hum bars (AC interference simulation) --
+    #if ENABLE_HUM_BARS
+    if (abs(crt_hum_intensity) > 0.001)
+    {
+        float hum_scroll = frac(texcoord.y + float(FRAMECOUNT) / crt_hum_speed);
+        float hum_mult = (crt_hum_intensity >= 0.0)
+            ? (1.0 - crt_hum_intensity) + crt_hum_intensity * hum_scroll
+            : (1.0 + crt_hum_intensity) + crt_hum_intensity * (hum_scroll - 1.0);
+        c *= hum_mult;
+    }
+    #endif // ENABLE_HUM_BARS
 
     // -- Glow (tight + wide dual-scale bloom) --
     if (crt_glow_strength > 0.001 || crt_glow_wide_strength > 0.001)
@@ -4378,13 +4452,13 @@ void crt_decay_PS(
 // ============================================================
 // Light Warp pass
 // ============================================================
-#if ENABLE_LIGHT_WARP && !ENABLE_GEOMETRY
+#if ENABLE_LIGHT_WARP
 void crt_light_warp_PS(
     in  float4 position : SV_Position,
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    if (abs(crt_warp_strength) < 0.001)
+    if (abs(crt_warp_strength) < 0.001 && abs(crt_pin_phase) < 0.001)
     {
         color = tex2D(ReShade::BackBuffer, texcoord);
         return;
@@ -4392,8 +4466,16 @@ void crt_light_warp_PS(
     float ar   = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
     float2 uv  = texcoord - 0.5;
     uv.x      *= ar;
+
+    // Radial barrel/pincushion
     float  r2  = dot(uv, uv);
     uv        *= 1.0 + crt_warp_strength * r2;
+
+    // Pin phase: horizontal linearity varies with vertical position.
+    // Models CRT deflection yoke geometry (Sony Megatron approach).
+    // tex_coord.x *= 1 + pin_phase * tex_coord.y
+    uv.x      *= 1.0 + crt_pin_phase * (uv.y / max(0.5 * ar, 0.001));
+
     uv.x      /= ar;
     uv        += 0.5;
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
@@ -4649,7 +4731,7 @@ technique CRT_Standalone <
         PixelShader  = crt_soop_after_PS;
     }
     #endif
-    #if ENABLE_LIGHT_WARP && !ENABLE_GEOMETRY
+    #if ENABLE_LIGHT_WARP
     pass LightWarp
     {
         VertexShader = PostProcessVS;

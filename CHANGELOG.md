@@ -13,6 +13,15 @@ Simulates CRT interlaced mode by alternating which scanline rows are bright and 
 #### Corner Rounding (`ENABLE_CORNER_ROUND=1`)
 Rounded screen mask based on the CRT Guest Advanced corner() function. Three controls: Corner Size (radius), Border Size (independent edge shadow on all four sides simulating bezel housing shadow), and Border Intensity (power curve controlling sharpness). The mask is a luminance multiplier — darkens toward edges and corners naturally, no flat bezel colour needed. No separate colour picker required.
 
+#### Hum Bars (`ENABLE_HUM_BARS=1`)
+Simulates AC mains interference — a slow-moving sawtooth brightness gradient matching the Guest Advanced `humbars()` implementation. Two controls: Intensity (positive = dark bar, negative = bright bar) and Speed (50 = 50Hz PAL, 60 = 60Hz NTSC). Applied after vignette, before glow. Off by default, gated by `ENABLE_HUM_BARS` to keep interface clean.
+
+#### Horizontal Convergence
+Two new sliders under Convergence: Red Horizontal and Blue Horizontal. Independent X offset per channel, complementing the existing vertical convergence offsets. Real CRTs had convergence errors in both axes. Compounds with vertical convergence and radial CA.
+
+#### Pin Phase (`ENABLE_LIGHT_WARP=1`)
+Sony Megatron-style horizontal scan linearity error: `uv.x *= 1 + pin_phase * uv.y`. Models real CRT deflection yoke geometry where horizontal linearity changes with vertical deflection angle. Different from radial barrel warp — distorts only horizontally. Can be combined with Warp Strength for stacked effects. Slider under Light Warp category.
+
 #### Scanline Resolution Independence (`SCANLINE_REFERENCE_HEIGHT`)
 New preprocessor define (default 0 = disabled). Set to your display's native vertical resolution (2160 for 4K, 2880 for 5K). When set, `crt_scanline_width` is automatically scaled proportionally to render resolution, so the same scanline width value produces identical-looking scanlines in every game regardless of their internal render resolution. Existing presets unaffected when disabled.
 

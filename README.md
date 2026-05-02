@@ -52,6 +52,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `ENABLE_LIGHT_WARP` | 0 | Lightweight barrel/pincushion distortion (only active when ENABLE_GEOMETRY=0) |
 | `ENABLE_INTERLACE` | 0 | Interlaced field simulation — alternates scanline fields each frame |
 | `ENABLE_CORNER_ROUND` | 0 | Rounded screen corners with optional bezel border shadow |
+| `ENABLE_HUM_BARS` | 0 | AC interference hum bar simulation |
 
 ### Resolution / Quality Defines
 
@@ -197,6 +198,7 @@ Radial colour fringing simulating glass lens dispersion. Zero at screen centre, 
 Simulates CRT electron gun misregistration — independent vertical offset per R/G/B channel. Different from CA (which is radial/lens-based). Both can be used simultaneously.
 
 - **R/G/B Vertical** — uniform vertical offset per channel in pixels
+- **Red/Blue Horizontal Convergence** — independent horizontal X offset per channel, complementing the existing vertical offsets. Real CRTs had convergence errors in both axes
 - **Radial Misconvergence** — physically based pincushion model: convergence error grows toward the screen edges following Δy = k × x². Zero at centre, maximum at horizontal edges. Red diverges upward, blue downward — matching real pincushion misconvergence geometry. Added on top of uniform offsets. 0.0 = off (default). 0.5–1.0 = subtle authentic edge fringing
 
 ### Vignette
@@ -208,6 +210,13 @@ Edge darkening.
 - **Strength** — overall vignette intensity
 - **Highlight Protection Threshold** — luminance above which highlights are progressively protected from vignette darkening
 - **Highlight Protection Strength** — how strongly highlights are protected. 0.0 = original behaviour (no protection). 1.0 = full protection: pixels at peak brightness receive zero vignette darkening. Use threshold to define where protection starts, strength to control how complete it is
+
+### Hum Bars
+
+Requires `ENABLE_HUM_BARS=1`. Simulates AC mains interference — a slow-moving brightness gradient caused by 50/60Hz electrical pickup in poorly shielded CRTs. Common on older consumer hardware and PAL sets.
+
+- **Hum Bar Intensity** — 0.0 = disabled. Positive = dark band scrolls upward. Negative = bright band scrolls. 0.1–0.2 = subtle, 0.5+ = strong visible banding
+- **Hum Bar Speed** — scroll rate. 50 = typical 50Hz PAL interference. 60 = 60Hz NTSC
 
 ### Film Grain
 - **Animate** — grain changes each frame (recommended)
@@ -306,6 +315,7 @@ Requires `ENABLE_LIGHT_WARP=1` and `ENABLE_GEOMETRY=0`. A lightweight barrel/pin
 
 - **Warp Strength** — positive = barrel distortion (image curves inward, CRT-like). Negative = pincushion. 0.1–0.3 = subtle CRT curve. 0.5+ = strong
 - **Warp Border Colour** — colour of the area outside the warped screen boundary. Black (default) = authentic CRT bezel look
+- **Pin Phase** — horizontal scan linearity error based on Sony Megatron: horizontal position of each scanline varies with its vertical position (`uv.x *= 1 + pin_phase * uv.y`). Models real CRT deflection yoke geometry. Positive = pincushion, negative = barrel. Different from radial warp — distorts only horizontally, which is more physically accurate to real CRT raster geometry. Can be used alongside Warp Strength for combined effects
 
 ### Corner Rounding
 

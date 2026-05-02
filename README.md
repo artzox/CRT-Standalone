@@ -153,6 +153,8 @@ Requires `ENABLE_INTERLACE=1`. Simulates CRT interlaced mode by alternating whic
 
 - **Interlace Strength** — 0.0 = no effect. 1.0 = full field blanking (dark rows go completely black on alternate frames). 0.3–0.5 = softer look. Automatically accounts for BFI cycle length so the field alternation stays in sync with lit frames
 
+**Note:** Not compatible with frame generation that runs outside ReShade (Nvidia Smooth Motion, LSFG, Nvidia Smooth Motion). Generated frames are invisible to FRAMECOUNT, causing the field pattern to become irregular. DLSS Frame Generation (which runs inside ReShade's pipeline) works correctly
+
 ### Halation
 
 - **Strength** — overall halation intensity
@@ -441,7 +443,7 @@ Using Variable MPRT (Blur Busters method) with `PIPELINE=1` or `PIPELINE=2` caus
 
 - **DLSS Frame Generation:** FRAMECOUNT increments for generated frames. BFI naturally alternates real/generated frames between lit and dark phases — this is actually correct behaviour. Use Frame Gen Phase Flip if the phase is inverted
 - **Lossless Scaling (LSFG):** Runs outside ReShade, FRAMECOUNT does not see generated frames. LSFG duplicates the last ReShade output frame — if that was a dark frame, the duplicated frame is also dark. BFI is not meaningfully compatible with LSFG
-- **Nvidia Smooth Motion:** Same as LSFG — runs outside ReShade, not compatible
+- **Nvidia Smooth Motion:** Same as LSFG — runs outside ReShade, not compatible. Also affects `ENABLE_INTERLACE` — generated frames are not seen by FRAMECOUNT, causing the interlace field pattern to become irregular (drifting multi-scanline pattern). Interlace is not compatible with any frame generation that runs outside ReShade
 
 ### BFI Desync in Some Games
 

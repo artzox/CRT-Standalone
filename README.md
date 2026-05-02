@@ -153,7 +153,7 @@ Requires `ENABLE_INTERLACE=1`. Simulates CRT interlaced mode by alternating whic
 
 - **Interlace Strength** — 0.0 = no effect. 1.0 = full field blanking (dark rows go completely black on alternate frames). 0.3–0.5 = softer look. Automatically accounts for BFI cycle length so the field alternation stays in sync with lit frames
 
-**Note:** Not compatible with frame generation that runs outside ReShade (Nvidia Smooth Motion, LSFG, Nvidia Smooth Motion). Generated frames are invisible to FRAMECOUNT, causing the field pattern to become irregular. DLSS Frame Generation (which runs inside ReShade's pipeline) works correctly
+**Note:** Not compatible with frame generation that runs outside ReShade (Nvidia Smooth Motion, LSFG). Generated frames are invisible to FRAMECOUNT, causing the field pattern to become irregular. DLSS Frame Generation (which runs inside ReShade's pipeline) works correctly
 
 ### Halation
 

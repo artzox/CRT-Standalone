@@ -146,7 +146,11 @@ The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through
 - **Scanline Strength** — depth of dark scanlines between phosphor rows
 - **Scanline Sigma** — softness of the scanline edge
 - **Per-channel attack** — how much each channel contributes to the scanline modulation
+- **Beam Sigma Dark (pixels)** — beam width for dark pixels in pixel units (requires `ENABLE_BEAM_MODULATION=1`). Lower = tighter beam, deeper dark gaps. For visible gaps keep well below the scanline width value. Example: at Scanline Width 4, Dark Sigma 0.5 gives a narrow beam that creates deep gaps; 1.5+ will fill the gap with a semi-transparent haze
+- **Beam Sigma Bright (pixels)** — beam width for bright pixels. Higher = wider beam, bright scanline centres spread more. Physically models how a CRT electron beam widens at higher current. Should be ≥ Dark Sigma. Mid-grey pixels use the interpolated value between dark and bright
 - **Beam Horizontal Bloom** — simulates electron beam horizontal spreading on very bright scanlines. On real CRTs, high-current beams (saturated whites) spread sideways due to space charge repulsion between electrons. Only active above ~70% luma, with full effect above 90%. 0.0 = off (default). 0.3–0.5 = subtle spreading on bright highlights
+
+**Note on Scanline Width:** The shader snaps `crt_scanline_width` to the nearest integer internally. Non-integer values caused some pixel rows to sample at the bright scanline centre while neighbouring rows sampled at the dark edge, producing oscillating scanline sizes and inconsistent mask darkness as the width slider was moved. Integer-snapping ensures every N rows form one clean scanline period
 
 ### Interlace
 

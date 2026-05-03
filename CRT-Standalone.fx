@@ -636,16 +636,22 @@ uniform float crt_beam_h_bloom <
 > = 0.0;
 
 uniform float crt_beam_min_sigma <
-    ui_type = "drag"; ui_label = "Beam Sigma (Dark pixels)";
+    ui_type = "drag"; ui_label = "Beam Sigma Dark (pixels)";
     ui_category = "Scanlines";
-    ui_tooltip = "Used with ENABLE_BEAM_MODULATION=1.";
-    ui_min = 0.05; ui_max = 2.0; ui_step = 0.01;
-> = 0.3;
+    ui_tooltip = "Beam width for dark pixels in pixel units (ENABLE_BEAM_MODULATION=1).\n"
+                 "Lower = tighter beam, deeper dark gaps between scanlines.\n"
+                 "For visible dark gaps: keep below 0.3 * scanline_width.\n"
+                 "0.5 = half a pixel wide. 1.0 = one pixel wide.";
+    ui_min = 0.05; ui_max = 8.0; ui_step = 0.05;
+> = 0.5;
 uniform float crt_beam_max_sigma <
-    ui_type = "drag"; ui_label = "Beam Sigma (Bright pixels)";
+    ui_type = "drag"; ui_label = "Beam Sigma Bright (pixels)";
     ui_category = "Scanlines";
-    ui_min = 0.05; ui_max = 2.0; ui_step = 0.01;
-> = 0.6;
+    ui_tooltip = "Beam width for bright pixels in pixel units (ENABLE_BEAM_MODULATION=1).\n"
+                 "Higher = wider beam, brighter scanline centres bleed more.\n"
+                 "Should be >= Beam Sigma Dark.";
+    ui_min = 0.05; ui_max = 8.0; ui_step = 0.05;
+> = 1.0;
 uniform float crt_scanline_sigma <
     ui_type = "drag"; ui_label = "Beam Sigma (Fixed, BEAM_MODULATION=0)";
     ui_category = "Scanlines";
@@ -3248,29 +3254,38 @@ void crt_main_PS(
     #else
     float scan_width = crt_scanline_width;
     #endif
+    // Snap to nearest integer: non-integer scan_width causes some rows to
+    // get f near 0 (bright) and others near ±0.5 (dark), producing oscillating
+    // scanline sizes and inconsistent mask darkness as width increases.
+    scan_width = max(round(scan_width), 1.0);
 
     // Interlace: shift scanline phase by half a scanline width every other frame.
     // Alternates which rows are bright/dark, simulating CRT interlaced mode.
     // Applied here (to the scanline period) not as a UV shift, so the actual
     // dark gaps between scanlines move position rather than the whole image shifting.
-    float scanline_y = fc.y;
+    // Snap to integer pixel coordinates before scanline calculation
+    // to avoid floating point precision errors at period boundaries.
+    float scanline_y = floor(fc.y) + 0.5;
     float f  = frac(scanline_y / scan_width) - 0.5;
-    float fw = fwidth(scanline_y / scan_width);
+    float fw = fwidth(fc.y / scan_width);
     float fa = f - fw * 0.5;
     float fb = f + fw * 0.5;
     float da = abs(fa) * 2.0;
     float db = abs(fb) * 2.0;
 
     #if ENABLE_BEAM_MODULATION
-        float r_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.r));
-        float g_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.g));
-        float b_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.b));
-        float beam_r = 0.5*(megatron_scanline(c_lin.r,da,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack)*gauss(fa,r_sigma)
-                           +megatron_scanline(c_lin.r,db,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack)*gauss(fb,r_sigma));
-        float beam_g = 0.5*(megatron_scanline(c_lin.g,da,crt_g_scanline_min,crt_g_scanline_max,crt_g_scanline_attack)*gauss(fa,g_sigma)
-                           +megatron_scanline(c_lin.g,db,crt_g_scanline_min,crt_g_scanline_max,crt_g_scanline_attack)*gauss(fb,g_sigma));
-        float beam_b = 0.5*(megatron_scanline(c_lin.b,da,crt_b_scanline_min,crt_b_scanline_max,crt_b_scanline_attack)*gauss(fa,b_sigma)
-                           +megatron_scanline(c_lin.b,db,crt_b_scanline_min,crt_b_scanline_max,crt_b_scanline_attack)*gauss(fb,b_sigma));
+        // Luminance-dependent beam width. Sigma is in normalised scanline-period
+        // units where f ∈ [-0.5, 0.5]. Scale by 1/scan_width converts from pixel
+        // units so sigma=1.0 = 1 pixel regardless of scanline width.
+        // For a dark gap: gauss(0.5, sigma_norm) must be near 0.
+        // This requires sigma_norm < 0.2 -- i.e. sigma_pixels < 0.2*scan_width.
+        float sigma_scale = 1.0 / max(scan_width, 1.0);
+        float r_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.r)) * sigma_scale;
+        float g_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.g)) * sigma_scale;
+        float b_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.b)) * sigma_scale;
+        float beam_r = 0.5*(gauss(fa, r_sigma) + gauss(fb, r_sigma));
+        float beam_g = 0.5*(gauss(fa, g_sigma) + gauss(fb, g_sigma));
+        float beam_b = 0.5*(gauss(fa, b_sigma) + gauss(fb, b_sigma));
     #else
         float beam_r = 0.5*(megatron_scanline(c_lin.r,da,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack)*gauss(fa,crt_scanline_sigma)
                            +megatron_scanline(c_lin.r,db,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack)*gauss(fb,crt_scanline_sigma));

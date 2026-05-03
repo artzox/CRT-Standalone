@@ -16,6 +16,18 @@ Rounded screen mask based on the CRT Guest Advanced corner() function. Three con
 #### Hum Bars (`ENABLE_HUM_BARS=1`)
 Simulates AC mains interference — a slow-moving sawtooth brightness gradient matching the Guest Advanced `humbars()` implementation. Two controls: Intensity (positive = dark bar, negative = bright bar) and Speed (50 = 50Hz PAL, 60 = 60Hz NTSC). Applied after vignette, before glow. Off by default, gated by `ENABLE_HUM_BARS` to keep interface clean.
 
+#### Scanline Width Integer Snapping (Fix)
+`crt_scanline_width` is now snapped to the nearest integer before use. Non-integer values caused rows to sample unevenly across the scanline period — some rows landing near the bright centre, others near the dark edge — producing oscillating scanline sizes as the width slider was moved and inconsistent mask darkness at the same strength. Since scanlines must align to pixel rows, integer-only widths are physically correct and eliminate both artefacts.
+
+#### Beam Sigma Precision Fix
+`floor(fc.y) + 0.5` now snaps pixel row coordinates to integer centres before the scanline Gaussian calculation. Previously floating point accumulation at 4K placed some pixels fractionally past period boundaries, producing irregular rows where some scanlines appeared unaffected.
+
+#### Beam Sigma Scaling Fix
+Beam sigma values are now in pixel units rather than normalised scanline-period units. Previously sigma=0.5 meant "half a scanline period" — the Gaussian at the period edge was 61% of peak (effectively no dark gap). Now sigma=0.5 means 0.5 pixels wide, which at typical scan widths of 3–4 produces the expected deep gaps. Tooltip updated to clarify the relationship between sigma and scan width.
+
+#### Beam Modulation Double-Falloff Fix
+`ENABLE_BEAM_MODULATION=1` previously multiplied both `megatron_scanline()` (Bezier beam shape) and `gauss(f, sigma)` together, applying two falloff functions simultaneously. At sigma=2.0 the Gaussian was flat enough that this was invisible. At smaller sigma values the compound shape produced semi-transparent large scanlines. Fixed to use Gaussian only in beam modulation mode — the Bezier remains in the standard path.
+
 #### Horizontal Convergence
 Two new sliders under Convergence: Red Horizontal and Blue Horizontal. Independent X offset per channel, complementing the existing vertical convergence offsets. Real CRTs had convergence errors in both axes. Compounds with vertical convergence and radial CA.
 

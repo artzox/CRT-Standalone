@@ -1,128 +1,94 @@
 # CRT-Standalone — Changelog
 
-## Latest Update
-
-### New Features
-
-#### Lightweight Barrel Warp (`ENABLE_LIGHT_WARP=1`)
-Post-process barrel/pincushion distortion applied to the final image. Much cheaper than full geometry — no Lanczos reconstruction, no glow/halation correction passes. The entire scene including scanlines and mask bends with the warp. Only active when `ENABLE_GEOMETRY=0`. Controls: Warp Strength (positive=barrel, negative=pincushion) and Border Colour.
-
-#### Interlaced Field Simulation (`ENABLE_INTERLACE=1`)
-Simulates CRT interlaced mode by alternating which scanline rows are bright and dark each frame, matching real CRT field-based display. Implemented inside the scanline calculation so the actual dark gaps between scanlines move position rather than the whole image shifting. Automatically divides by the BFI cycle length (`crt_decay_frames`) so the field alternation stays in sync with lit frames. Most visible at high framerates with BFI active.
-
-#### Corner Rounding (`ENABLE_CORNER_ROUND=1`)
-Rounded screen mask based on the CRT Guest Advanced corner() function. Three controls: Corner Size (radius), Border Size (independent edge shadow on all four sides simulating bezel housing shadow), and Border Intensity (power curve controlling sharpness). The mask is a luminance multiplier — darkens toward edges and corners naturally, no flat bezel colour needed. No separate colour picker required.
-
-#### Interference System (`ENABLE_INTERFERENCE=1`)
-New dedicated post-process pass running after all CRT rendering — scanlines, mask, glow, halation, grain and HDR pipeline. All signal-level interference effects are correctly applied to the final composited image rather than inside the main CRT pass, since these phenomena (RF pickup, AC mains, antenna reflections) occur in the signal chain before the display. Merges the previous `ENABLE_HUM_BARS` gate — hum bars are now part of `ENABLE_INTERFERENCE`.
-
-Five effects in one pass (all independently controlled, all default to off):
-
-**Hum Bars** — migrated from `ENABLE_HUM_BARS`. Same controls: Intensity and Speed. Now correctly runs post-process.
-
-**Wiggle** — horizontal UV displacement using NewPixie's triple-sine formula (`sin(0.1t) × sin(0.23t) × sin(0.3+0.11t)`). Time base uses `mod(FRAMECOUNT, 849) * 36` matching NewPixie exactly. Both wiggle amplitude and ghost offsets are scaled by `1080 / BUFFER_HEIGHT` so the same slider value produces the same pixel displacement at any resolution.
-
-**Rolling Scanlines** — sine-wave scanline grid at screen-resolution frequency (`sin(6t - uv.y * HEIGHT * 1.5)`) that scrolls vertically. Matches NewPixie scanroll. Fixed 0.18 amplitude. `crt_flicker_strength` = scroll speed. Uses `abs(sin)` and normalises to 1.0 peak so no darkening occurs at speed=0. Resets every 640 frames.
-
-**Accumulate Modulation** — NewPixie-style phosphor afterglow: `max(prev × modulate, current × 0.96)`. AccumStore pass copies the result each frame. Runs first so subsequent effects composite on top of the accumulated image.
-
-**Ghost Image** — per-channel displaced samples from the final backbuffer. Fixed base offsets (`-0.014, -0.027` etc. × 0.85) place the ghost close to source (~1–2% displaced), matching NewPixie's fixed offsets. Small animated wobble from incommensurable sine/cosine pairs. Composited using NewPixie's formula: `pow(saturate(3 × ghost), 2) × ghs × (1 - luma_channel) × i`. Resolution-scaled so effect strength is consistent across 1080p/4K/5K.
-
-#### Hum Bars (`ENABLE_HUM_BARS=1`)
-Simulates AC mains interference — a slow-moving sawtooth brightness gradient matching the Guest Advanced `humbars()` implementation. Two controls: Intensity (positive = dark bar, negative = bright bar) and Speed (50 = 50Hz PAL, 60 = 60Hz NTSC). Applied after vignette, before glow. Off by default, gated by `ENABLE_HUM_BARS` to keep interface clean.
-
-#### Scanline Width Integer Snapping (Fix)
-`crt_scanline_width` is now snapped to the nearest integer before use. Non-integer values caused rows to sample unevenly across the scanline period — some rows landing near the bright centre, others near the dark edge — producing oscillating scanline sizes as the width slider was moved and inconsistent mask darkness at the same strength. Since scanlines must align to pixel rows, integer-only widths are physically correct and eliminate both artefacts.
-
-#### Beam Sigma Precision Fix
-`floor(fc.y) + 0.5` now snaps pixel row coordinates to integer centres before the scanline Gaussian calculation. Previously floating point accumulation at 4K placed some pixels fractionally past period boundaries, producing irregular rows where some scanlines appeared unaffected.
-
-#### Beam Sigma Scaling Fix
-Beam sigma values are now in pixel units rather than normalised scanline-period units. Previously sigma=0.5 meant "half a scanline period" — the Gaussian at the period edge was 61% of peak (effectively no dark gap). Now sigma=0.5 means 0.5 pixels wide, which at typical scan widths of 3–4 produces the expected deep gaps. Tooltip updated to clarify the relationship between sigma and scan width.
-
-#### Beam Modulation Double-Falloff Fix
-`ENABLE_BEAM_MODULATION=1` previously multiplied both `megatron_scanline()` (Bezier beam shape) and `gauss(f, sigma)` together, applying two falloff functions simultaneously. At sigma=2.0 the Gaussian was flat enough that this was invisible. At smaller sigma values the compound shape produced semi-transparent large scanlines. Fixed to use Gaussian only in beam modulation mode — the Bezier remains in the standard path.
-
-#### Horizontal Convergence
-Two new sliders under Convergence: Red Horizontal and Blue Horizontal. Independent X offset per channel, complementing the existing vertical convergence offsets. Real CRTs had convergence errors in both axes. Compounds with vertical convergence and radial CA.
-
-#### Pin Phase (`ENABLE_LIGHT_WARP=1`)
-Sony Megatron-style horizontal scan linearity error: `uv.x *= 1 + pin_phase * uv.y`. Models real CRT deflection yoke geometry where horizontal linearity changes with vertical deflection angle. Different from radial barrel warp — distorts only horizontally. Can be combined with Warp Strength for stacked effects. Slider under Light Warp category.
-
-#### Scanline Resolution Independence (`SCANLINE_REFERENCE_HEIGHT`)
-New preprocessor define (default 0 = disabled). Set to your display's native vertical resolution (2160 for 4K, 2880 for 5K). When set, `crt_scanline_width` is automatically scaled proportionally to render resolution, so the same scanline width value produces identical-looking scanlines in every game regardless of their internal render resolution. Existing presets unaffected when disabled.
+All notable changes to this project are documented here.
+Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH.
+- **MAJOR** — incompatible architectural change
+- **MINOR** — new features or breaking preset changes (re-tuning required)
+- **PATCH** — bug fixes that preserve existing preset behaviour
 
 ---
 
-### Improvements
+## [1.0.0] — 2025-05 — Initial public release
 
-#### Vignette HDR Protection — Reworked
-Replaced single threshold with two-slider system: **Highlight Protection Threshold** (where protection begins) and **Highlight Protection Strength** (0.0 = original behaviour, 1.0 = full isolation of highlights above threshold). The gate now applies before the strength lerp for consistent behaviour across both rectangular and circular vignette shapes.
+First public release. Feature-complete CRT emulation shader for ReShade targeting QD-OLED and high-resolution SDR displays.
 
-#### BFI/Pipeline Contrast Fix
-In `PIPELINE>=1`, the BCS contrast curve now decodes from sRGB to linear before `apply_bcs` and re-encodes after. Previously the Bezier curve operated on already-gamma-encoded values causing the internal `pow(Y, 1/2.4)` step to double-encode, producing different contrast behaviour in HDR mode vs SDR.
+### Core CRT Pipeline
+- Pre-blur (H+V Gaussian, Lanczos2/3, Catmull-Rom) acting as analogue AA
+- Megatron cubic Bezier per-channel scanline beam model
+- Luminance-dependent beam width modulation (`ENABLE_BEAM_MODULATION`)
+- Scanline beam snapped to integer pixel rows — eliminates oscillating size and mask inconsistency
+- Scanline sigma in pixel units (not normalised period units)
+- Resolution-independent scanline width via `SCANLINE_REFERENCE_HEIGHT`
+- Shadow mask: 8 types including QD-OLED Delta and Luma Gate
+- Mask moiré dither (Haeberli & Segal 1990)
+- Per-channel phosphor profiles (6 types: EBU, P22, SMPTE-C, Trinitron, NTSC1953, NTSC1953-D93)
+- Megatron Bezier BCS in Yxy space (no washout)
+- Colour temperature adjustment
 
-#### Ping-Pong Textures for Luma Monitors
-`crt_decay_luma_lit_tex` and `crt_decay_luma_dark_tex` were being both read and written in the same pass, causing a D3D `X3020` error on some drivers. Fixed with dedicated `_prev_tex` copies updated each frame before the monitor update passes.
+### Glow & Halation
+- Dual-scale bloom (tight + wide glow passes)
+- Spectral bloom (per-channel sigma based on wavelength)
+- Glow soft knee
+- Halation warmth (neutral to warm orange-red)
+- Electron beam horizontal bloom (luma-gated)
 
----
+### HDR Pipeline (`PIPELINE=1/2`)
+- scRGB and HDR10 Soop sandwich integration
+- BCS corrected for HDR pipeline (decode before Bezier, re-encode after)
+- Variable MPRT (Blur Busters algorithm, MIT licence)
+- Fibonacci phosphor persistence
 
-### Removed
+### Geometry & Distortion
+- Full geometry warp with Lanczos reconstruction (`ENABLE_GEOMETRY`)
+- Lightweight post-process barrel/pincushion warp (`ENABLE_LIGHT_WARP`)
+- Pin phase horizontal linearity distortion (Sony Megatron approach)
 
-#### Temporal Grain Correlation
-Removed. The implementation produced grain elements that were too large and reduced image clarity even when technically functional. The grain system otherwise unchanged — per-frame Poisson noise with spatial diffusion via `crt_grain_size`.
+### Convergence & CA
+- Vertical per-channel convergence offsets (R/G/B)
+- Horizontal per-channel convergence offsets (R/B)
+- Radial misconvergence (pincushion model)
+- Radial chromatic aberration
 
----
+### Screen & Presentation
+- Vignette: rectangular (authentic CRT) and circular modes
+- Highlight protection: threshold + strength sliders (linear ramp in sRGB space)
+- Corner rounding with border shadow (Guest Advanced approach, GPL v2+)
+- Edge blur (radial optical defocus)
+- Post-scanline softening
+- CAS sharpening (AMD, MIT)
+- Motion sharpening
 
-### Compile Fixes
+### Interference (`ENABLE_INTERFERENCE`)
+All signal-level effects applied as a single post-process pass after all CRT rendering. Based on NewPixie (MIT/PD):
+- Wiggle: triple-sine horizontal displacement, resolution-scaled
+- Rolling scanlines: sync instability at screen-resolution frequency
+- Hum bars: AC mains interference scrolling gradient
+- Ghost image: per-channel displaced samples with fixed offset + animated wobble, resolution-scaled
+- Accumulate modulation: `max(prev × modulate, current × 0.96)` phosphor afterglow
 
-- `FRAMECOUNT`, `CRT_TIMER`, and `CRT_FRAMETIME` were declared inside `#if ENABLE_GRAIN`. When `ENABLE_GRAIN=0` these were undefined but referenced by interlace, burn-in, and decay code. Moved to a system uniforms block that is always compiled in.
-- `crt_grain_raw_tex` self-sampling error: `GrainMerged` was writing to `crt_grain_raw_tex` (RenderTarget1) while the temporal grain code read from the same texture, triggering `X3020`. Fixed by removing temporal grain entirely.
+### Interlace (`ENABLE_INTERLACE`)
+Field-based scanline blanking alternating every frame. BFI-cycle aware. Incompatible with out-of-ReShade frame generation (Smooth Motion, LSFG).
 
----
+### Film Grain
+- Poisson variance grain (inspired by METEOR, Marty McModding)
+- Spatial diffusion via separate GrainDiffuse pass
+- Per-channel colour grain option
+- Grain size, intensity, shadow weight controls
 
-## Previous Version
+### Bug Fixes (accumulated during development)
+- Beam sigma double-falloff: `megatron_scanline × gauss` compound removed; beam modulation now uses Gaussian only
+- Beam sigma units corrected from normalised period to pixel units
+- Scan_width integer snap: non-integer widths caused oscillating scanline sizes and inconsistent mask darkness
+- `floor(fc.y) + 0.5` pixel row snapping: eliminated irregular scanlines from float precision at 4K
+- BCS pipeline fix: HDR path now decodes to linear before Bezier, re-encodes after
+- Luma monitor ping-pong: fixed D3D X3020 same-pass read/write error
+- `FRAMECOUNT`, `CRT_TIMER`, `CRT_FRAMETIME` moved outside `ENABLE_GRAIN` gate
+- `ENABLE_GRAIN=0` compile fix
+- `GLOW_RESOLUTION > 1` mini-screen artefact noted (set to 1 for affected games e.g. Cuphead)
 
-### New Features
-
-#### Dual-Scale Bloom
-Wide glow pass at half resolution adds broad area bloom complementing the tight per-element glow. Three controls under Brightness & Glow: Wide Glow Strength (default 0.0), Wide Glow Radius, Wide Glow Threshold.
-
-#### Spectral Bloom
-Per-channel glow sigma: blue blooms wider than red (R=0.75×, G=1.0×, B=1.35×) based on wavelength-dependent diffraction. Controlled by Spectral Bloom slider (default 0.0 = uniform).
-
-#### Glow Soft Knee
-Glow Knee slider replaces hard luminance threshold with smoothstep fade-in. Dark pixels contribute progressively less to glow. Works at Threshold=0.
-
-#### Halation Warmth
-Halation Warmth slider controls colour temperature of the halo — neutral white to warm orange-red matching real CRT phosphor backscatter.
-
-#### Moiré Dither
-Mask Moiré Dither adds random sub-pixel phase offset per 16×16 tile, breaking mask periodicity. Based on Haeberli & Segal (1990).
-
-#### Radial Misconvergence
-Convergence error grows toward screen edges following Δy = k × x² (pincushion model). Red diverges up, blue down at edges.
-
-#### Per-Channel Phosphor Persistence
-Persistence R/G/B sliders for independent decay rates. Real P22: green longest (~2–3ms), blue fastest (~0.5ms).
-
-#### Electron Beam Horizontal Bloom
-Luminance-gated 3-tap horizontal Gaussian on very bright scanlines (>70% luma gate). Simulates space charge beam spreading.
-
-### Phosphor Profile Overhaul
-All matrices recomputed from documented CIE xy chromaticity coordinates. Two new profiles: NTSC 1953 (Illuminant C) and NTSC 1953 D93 (Japanese ~9300K). Philips merged into SMPTE-C (identical chromaticities). Gamma corrected from hardcoded 2.2 to proper sRGB piecewise TRC. `ENABLE_PHOSPHOR` defaults to 1.
-
-**Profile index order changed** — check presets after updating.
-
-### Preprocessor Gates
-New defines with UI hiding: `ENABLE_CA`, `ENABLE_CONVERGENCE`, `ENABLE_VIGNETTE`, `ENABLE_GRAIN`, `ENABLE_PREBLUR`, `ENABLE_HALATION`, `ENABLE_EDGE_BLUR`.
-
-### Reconstruction Filter
-`PREBLUR_FILTER` selects between Lanczos2 (0), Lanczos3 (1), Catmull-Rom (2) for pre-blur and geometry warp sampling.
-
-### Optimisation
-No-preblur + no-geometry path restored to plain bilinear (Lanczos was accidentally used in blur loops, costing ~10fps). Glow and halation blur passes use correct sampling paths per pipeline.
-
-### Compute Grain Removed
-~267 lines of dead `#if ENABLE_GRAIN_COMPUTE` code removed.
+### Known Issues
+- Software BFI incompatible with VRR (frame timing unpredictable)
+- Variable MPRT incompatible with HDR pipeline (red tint warning displayed)
+- `ENABLE_INTERLACE` incompatible with Nvidia Smooth Motion and LSFG
+- `GLOW_RESOLUTION > 1` may cause double-image in some games — set to 1
 

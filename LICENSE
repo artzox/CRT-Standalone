@@ -1,0 +1,44 @@
+CRT-Standalone ReShade Shader
+Copyright (C) 2024-2025 Serge
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software Foundation,
+Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+-------------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+-------------------------------------------------------------------------------
+
+CRT Guest Advanced (corner function, hum bars, scanline beam shape)
+  Copyright (C) 2018-2025 guest(r)
+  Licensed under GNU General Public License v2 or later
+
+Sony Megatron CRT Shader (Bezier BCS, pin phase, scanline compositing)
+  Copyright (C) MajorPainTheCactus
+  Contains code Copyright (C) Microsoft Corporation
+  Licensed under MIT License
+
+NewPixie (wiggle, rolling scanlines, ghost image, accumulate modulation)
+  Copyright (C) iktah
+  Licensed under MIT License / Public Domain (Unlicense) — dual licence
+
+Variable MPRT Algorithm
+  Copyright (C) Mark Rejhon, Timothy Lottes — Blur Busters
+  Licensed under MIT License
+
+CAS (Contrast Adaptive Sharpening)
+  Copyright (C) 2019 Advanced Micro Devices, Inc.
+  Licensed under MIT License
+
+Film grain (Poisson variance approach)
+  Inspired by METEOR shader by Marty McModding

@@ -1,5 +1,52 @@
 # CRT-Standalone Shader — User Guide
 
+## Getting Started
+
+### Installation
+1. Copy `CRT-Standalone.fx` into your game's ReShade `Shaders` folder
+2. Enable the `CRT_Standalone` technique in the ReShade overlay
+3. Configure preprocessor definitions and sliders to taste
+
+### Preprocessor Definitions
+Set these in the ReShade **Preprocessor Definitions** panel (not the sliders):
+
+| Define | What to set |
+|---|---|
+| `PIPELINE` | **0** = SDR (default). **1** = scRGB HDR (recommended for HDR games with Soop). **2** = HDR10 |
+| `GLOW_RESOLUTION` | **2** = half resolution (default, recommended). **1** = full resolution (use if you see double-image artefacts in some games) |
+| `ENABLE_GEOMETRY` | **1** to enable screen curvature warp with Lanczos reconstruction |
+| `ENABLE_LIGHT_WARP` | **1** for lightweight barrel distortion (cheaper than full geometry) |
+| `ENABLE_CORNER_ROUND` | **1** for rounded screen corners with bezel shadow |
+| `ENABLE_INTERLACE` | **1** for interlaced field simulation (needs BFI or high framerate) |
+| `ENABLE_INTERFERENCE` | **1** for signal interference effects (wiggle, ghost, rolling scanlines, hum bars) |
+| `ENABLE_DECAY` | **1** to enable phosphor persistence / BFI system |
+| `ENABLE_BEAM_MODULATION` | **1** for luminance-dependent beam width |
+| `SCANLINE_REFERENCE_HEIGHT` | Set to your display height (e.g. **2160** for 4K, **2880** for 5K) for resolution-independent scanline width |
+
+### Recommended Starting Points
+
+**QD-OLED HDR (e.g. Sony A95L) — Soop pipeline:**
+```
+PIPELINE=1
+GLOW_RESOLUTION=2
+SCANLINE_REFERENCE_HEIGHT=2880  (or 2160 for 4K)
+ENABLE_DECAY=1
+```
+Set `crt_scanline_width` to 6–8 at 5K, 4–6 at 4K. Enable BFI (`crt_decay_frames=2`) if your display supports it. Adjust `crt_soop_peak_nits` to match your display's peak brightness.
+
+**SDR / Generic display:**
+```
+PIPELINE=0
+GLOW_RESOLUTION=2
+ENABLE_DECAY=0
+```
+Start with default sliders. Set `crt_scanline_width` to 3–4 at 1080p, 5–6 at 1440p.
+
+**Pixel art / retro games (240p–480p content):**
+Increase `crt_scanline_width` so scanlines are visibly thick. Enable `ENABLE_PREBLUR` and raise `crt_preblur_h_sigma` slightly to soften pixel edges before the CRT processing.
+
+---
+
 ## Overview
 
 CRT-Standalone is a comprehensive CRT display simulation shader for ReShade. It covers the full signal chain of a real CRT — from pre-processing through phosphor simulation — and includes an optional BFI (Black Frame Insertion) system for reducing sample-and-hold motion blur on modern LCD/OLED displays.
@@ -525,6 +572,14 @@ Sifu, Crash Bandicoot, Cuphead, Hades 1 & 2, Hollow Knight, Planet of Lana 2, Le
 ---
 
 ## Credits
+
+### License
+
+CRT-Standalone is licensed under **GNU General Public License v2 or later (GPL v2+)**. This is required for compatibility with CRT Guest Advanced (GPL v2+) from which the corner rounding function is derived. All other incorporated components (Megatron/MIT, NewPixie/MIT+PD, Variable MPRT/MIT, CAS/MIT) are compatible with GPL v2+.
+
+See the `LICENSE` file for full terms.
+
+---
 
 **Reference shaders consulted for implementation guidance:**
 

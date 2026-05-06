@@ -259,6 +259,21 @@ Remaps game colours through a chosen CRT phosphor primary set to CIE XYZ, then t
 - **Correction Strength** — blend between original colours (0.0) and fully corrected (1.0). Allows subtle correction without full commitment
 - **Display Gamut** — output colour space of your display. sRGB for standard monitors, DCI-P3 Modern for most OLEDs and wide-gamut displays, Rec. 2020 for QD-OLED native gamut
 
+### Interference
+
+Requires `ENABLE_INTERFERENCE=1`. All interference effects run as a single post-process pass applied to the final composited image — after scanlines, mask, glow, halation, grain and HDR pipeline. This is correct because these are signal-level effects (RF pickup, AC mains, antenna reflections) that happen to the video signal before it reaches the display, not to the display itself.
+
+Effects run in this order within the pass: accumulate modulation → wiggle → hum bars → rolling scanlines → ghost.
+
+- **Hum Bar Intensity** — AC mains interference scrolling brightness gradient. Caused by 50/60Hz electrical pickup in poorly shielded CRTs. Positive = dark band scrolls up, negative = bright band. 0.1–0.2 = subtle, 0.5+ = strong
+- **Hum Bar Speed** — scroll rate. 50 = 50Hz PAL. 60 = 60Hz NTSC
+- **Wiggle Strength** — horizontal UV displacement per scanline row, simulating electromagnetic interference. Three incommensurable sine waves multiplied together (NewPixie approach) create a complex quasi-random waveform. Scaled by resolution — same value produces the same pixel displacement at any resolution. At 4K start around 0.0001–0.0003
+- **Wiggle Speed** — how fast the wiggle pattern evolves. Resets every 849 frames to prevent drift
+- **Rolling Scanlines Speed** — sine-wave scanline grid at screen-resolution frequency that scrolls vertically, simulating sync instability. Fixed 0.18 amplitude matching NewPixie. Speed=0 disables. Resets every 640 frames
+- **Accumulate Modulation** — phosphor afterglow accumulation. Each frame blends `max(prev × modulate, current × 0.96)`. Bright content trails across frames. 0.5–0.7 = subtle trail, 0.9+ = heavy persistence
+- **Ghost Strength** — chromatic ghost image displaced slightly from the source, simulating RF reflections in an antenna cable arriving delayed. Each R/G/B channel samples at a fixed small offset plus a tiny animated wobble. Scaled by resolution — at 4K/5K start around 0.005–0.01. NewPixie hardcoded value is 0.15 at 1080p
+- **Ghost Speed** — speed of the animated wobble on the ghost position. Does not affect the fixed base displacement
+
 ### Edge Blur
 
 Simulates CRT aperture falloff — soft darkening and blurring toward screen edges, independent of vignette.
@@ -519,9 +534,18 @@ Sifu, Crash Bandicoot, Cuphead, Hades 1 & 2, Hollow Knight, Planet of Lana 2, Le
 
 ## Credits
 
-- BFI algorithm: custom implementation
-- Variable MPRT: Blur Busters algorithm (Mark Rejhon, Timothy Lottes — MIT licence)
-- CAS sharpening: AMD Contrast Adaptive Sharpening
-- Film grain: Poisson variance approach inspired by METEOR (Marty McModding)
-- Soop HDR sandwich integration: Soop framework
-- Halation, scanlines, mask: original implementation
+**Reference shaders consulted for implementation guidance:**
+
+- **CRT Royale** (Timothy Lottes) — scanline beam model, phosphor persistence architecture
+- **CRT Guest Advanced** (guest.r) — corner rounding function, hum bars implementation, scanline beam shape controls, afterglow approach
+- **Sony Megatron CRT** (MajorPainTheCactus) — Bezier brightness/contrast/saturation in Yxy space, pin phase horizontal linearity distortion, scanline compositing approach
+- **NewPixie** (iktah) — interference effects: wiggle triple-sine, rolling scanlines (scanroll), ghost image compositing formula, accumulate modulation pattern
+
+**Algorithms and techniques:**
+
+- **Variable MPRT** — Blur Busters algorithm (Mark Rejhon, Timothy Lottes — MIT licence)
+- **CAS Sharpening** — AMD Contrast Adaptive Sharpening
+- **Film grain** — Poisson variance approach inspired by METEOR (Marty McModding)
+- **Mask moiré dither** — Haeberli & Segal (1990) display simulation
+- **Soop HDR sandwich** — Soop framework integration
+- **BFI** — custom implementation

@@ -81,10 +81,12 @@
     #define GLOW_RESOLUTION 2
 #endif
 
-// Hum bars (AC interference simulation)
+// Interference: wiggle, rolling scanlines, hum bars, ghosting, accumulation.
+// All are signal-level effects applied as a post-process on the final image.
+// Simulates RF/magnetic interference on a CRT signal.
 // 1 = enabled, 0 = disabled (default)
-#ifndef ENABLE_HUM_BARS
-    #define ENABLE_HUM_BARS 0
+#ifndef ENABLE_INTERFERENCE
+    #define ENABLE_INTERFERENCE 0
 #endif
 
 // Scanline reference height for resolution-independent scanline width.
@@ -1300,30 +1302,6 @@ uniform float crt_edge_blur_radius <
 #endif // ENABLE_EDGE_BLUR
 
 // ============================================================
-// Uniforms -- Hum Bars
-// ============================================================
-
-#if ENABLE_HUM_BARS
-uniform float crt_hum_intensity <
-    ui_type = "drag"; ui_label = "Hum Bar Intensity";
-    ui_category = "Hum Bars";
-    ui_tooltip = "Simulates AC interference (hum bars) -- a slow-moving brightness\n"
-                 "gradient caused by 50/60Hz electrical interference in poorly\n"
-                 "shielded CRTs. Common in PAL sets and older consumer hardware.\n"
-                 "0.0 = disabled (default). Positive = dark band. Negative = bright band.\n"
-                 "0.1-0.2 = subtle. 0.5+ = strong visible banding.";
-    ui_min = -1.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.0;
-
-uniform float crt_hum_speed <
-    ui_type = "drag"; ui_label = "Hum Bar Speed";
-    ui_category = "Hum Bars";
-    ui_tooltip = "Scroll speed of the hum bar. 50 = typical 50Hz PAL. 60 = 60Hz NTSC.";
-    ui_min = 1.0; ui_max = 200.0; ui_step = 1.0;
-> = 50.0;
-#endif // ENABLE_HUM_BARS
-
-// ============================================================
 #if ENABLE_GRAIN
 // Uniforms -- Film Grain
 // ============================================================
@@ -1692,6 +1670,87 @@ uniform bool crt_decay_tube_pos <
 
 // -- Phosphor Decay - Variable MPRT only ---------------------
 
+// ============================================================
+// Uniforms -- Interference
+// ============================================================
+
+#if ENABLE_INTERFERENCE
+uniform float crt_hum_intensity <
+    ui_type = "drag"; ui_label = "Hum Bar Intensity";
+    ui_category = "Interference";
+    ui_tooltip = "AC mains interference -- slow scrolling brightness gradient.\n"
+                 "Caused by 50/60Hz electrical pickup in poorly shielded CRTs.\n"
+                 "Positive = dark band scrolls up. Negative = bright band scrolls up.\n"
+                 "0.0 = disabled. 0.1-0.2 = subtle. 0.5+ = strong.";
+    ui_min = -1.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_hum_speed <
+    ui_type = "drag"; ui_label = "Hum Bar Speed";
+    ui_category = "Interference";
+    ui_tooltip = "Scroll speed. 50 = typical 50Hz PAL. 60 = 60Hz NTSC.";
+    ui_min = 1.0; ui_max = 200.0; ui_step = 1.0;
+> = 50.0;
+
+uniform float crt_wiggle_strength <
+    ui_type = "drag"; ui_label = "Wiggle Strength";
+    ui_category = "Interference";
+    ui_tooltip = "Horizontal UV displacement per scanline row.\n"
+                 "Scaled by resolution so 1080p value 0.0012 (NewPixie default)\n"
+                 "produces the same pixel displacement at any resolution.\n"
+                 "At 4K start around 0.0001-0.0003. At 1080p 0.0005-0.0012.\n"
+                 "0.0 = disabled.";
+    ui_min = 0.0; ui_max = 0.005; ui_step = 0.0001;
+> = 0.0;
+
+uniform float crt_wiggle_speed <
+    ui_type = "drag"; ui_label = "Wiggle Speed";
+    ui_category = "Interference";
+    ui_tooltip = "How fast the interference pattern evolves over time.";
+    ui_min = 0.0; ui_max = 4.0; ui_step = 0.1;
+> = 1.0;
+
+uniform float crt_flicker_strength <
+    ui_type = "drag"; ui_label = "Rolling Scanlines Strength";
+    ui_category = "Interference";
+    ui_tooltip = "Rolling scanline scroll speed. 0.0 = no rolling scanlines.\n"
+                 "Higher = faster scroll. 0.5 = slow. 2.0+ = fast.\n"
+                 "Amplitude fixed at 0.18 matching NewPixie.";
+    ui_min = 0.0; ui_max = 4.0; ui_step = 0.05;
+> = 0.0;
+
+uniform float crt_accum_modulate <
+    ui_type = "drag"; ui_label = "Accumulate Modulation";
+    ui_category = "Interference";
+    ui_tooltip = "Phosphor afterglow accumulation (NewPixie approach).\n"
+                 "Blends each frame with a decayed copy of the previous frame:\n"
+                 "output = max(prev * modulate, current * 0.96)\n"
+                 "Bright content trails and persists for several frames.\n"
+                 "0.0 = disabled. 0.5-0.7 = subtle trail. 0.9+ = heavy ghosting.\n"
+                 "Implemented as a dedicated accumulation pass.";
+    ui_min = 0.0; ui_max = 0.95; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_ghost_strength <
+    ui_type = "drag"; ui_label = "Ghost Strength";
+    ui_category = "Interference";
+    ui_tooltip = "Chromatic ghost image displaced from source.\n"
+                 "Very sensitive -- start at 0.005-0.01 for subtle effect.\n"
+                 "NewPixie hardcoded value is 0.15 (ghs) at 1080p.\n"
+                 "At 4K/5K use much lower values: 0.005-0.02.\n"
+                 "0.0 = disabled.";
+    ui_min = 0.0; ui_max = 0.3; ui_step = 0.005;
+> = 0.0;
+
+uniform float crt_ghost_speed <
+    ui_type = "drag"; ui_label = "Ghost Speed";
+    ui_category = "Interference";
+    ui_tooltip = "Speed of the animated ghost wobble. Default 1.0 matches NewPixie.\n"
+                 "The wobble is very small -- main ghost position is a fixed offset.";
+    ui_min = 0.0; ui_max = 4.0; ui_step = 0.1;
+> = 1.0;
+#endif // ENABLE_INTERFERENCE
+
 // Uniforms -- Pipeline (Soop integration)
 // Only relevant when PIPELINE=1 (scRGB) or PIPELINE=2 (HDR10)
 // ============================================================
@@ -1905,6 +1964,17 @@ texture2D crt_pregrain_tex < pooled = false; >
 };
 sampler2D crt_pregrain_samp { Texture = crt_pregrain_tex; };
 #endif // ENABLE_GRAIN
+
+// Accumulation texture for interference afterglow (NewPixie accumulate modulation)
+#if ENABLE_INTERFERENCE
+texture2D crt_accum_tex < pooled = false; >
+{
+    Width  = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = RGBA8;
+};
+sampler2D crt_accum_samp { Texture = crt_accum_tex; MagFilter = LINEAR; MinFilter = LINEAR; };
+#endif // ENABLE_INTERFERENCE
 
 // Glow horizontal blur output
 texture2D crt_glow_tex < pooled = false; >
@@ -3117,6 +3187,8 @@ void crt_main_PS(
         float orbit_h       = 0.0;
     #endif
 
+
+
     // Chromatic aberration + convergence UV offsets.
     // When disabled, all channels sample from the same texcoord.
     #if ENABLE_CA
@@ -3135,7 +3207,7 @@ void crt_main_PS(
     // Radial misconvergence: Δy = k * x² where x is normalised screen position.
     // Grows from zero at centre to maximum at horizontal edges.
     // Red diverges upward, blue downward -- matches real pincushion misconvergence.
-    float  cx          = (texcoord.x - 0.5) * 2.0; // [-1, 1]
+    float  cx          = (texcoord.x - 0.5) * 2.0;
     float  ar          = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
     float  radial_err  = crt_convergence_radial * cx * cx * ar * ReShade::PixelSize.y;
     // Horizontal convergence: independent per-channel X offset
@@ -3437,17 +3509,9 @@ void crt_main_PS(
     }
     #endif
 
-    // -- Hum bars (AC interference simulation) --
-    #if ENABLE_HUM_BARS
-    if (abs(crt_hum_intensity) > 0.001)
-    {
-        float hum_scroll = frac(texcoord.y + float(FRAMECOUNT) / crt_hum_speed);
-        float hum_mult = (crt_hum_intensity >= 0.0)
-            ? (1.0 - crt_hum_intensity) + crt_hum_intensity * hum_scroll
-            : (1.0 + crt_hum_intensity) + crt_hum_intensity * (hum_scroll - 1.0);
-        c *= hum_mult;
-    }
-    #endif // ENABLE_HUM_BARS
+
+    // -- Interference: rolling scanlines and animated chromatic ghosting --
+
 
     // -- Glow (tight + wide dual-scale bloom) --
     if (crt_glow_strength > 0.001 || crt_glow_wide_strength > 0.001)
@@ -4465,6 +4529,118 @@ void crt_decay_PS(
 // ============================================================
 
 // ============================================================
+// Interference pass -- all signal-level effects as post-process
+// Applied to the final image after all CRT rendering is complete.
+// Effects in order: accumulate, wiggle, hum bars, rolling scanlines, ghost
+// ============================================================
+#if ENABLE_INTERFERENCE
+void crt_accum_store_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = tex2D(ReShade::BackBuffer, texcoord);
+}
+
+void crt_interference_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    // -- Accumulate modulation (phosphor afterglow, NewPixie approach) --
+    // max(prev*modulate, current*0.96): bright content trails across frames.
+    float2 src_uv = texcoord;
+    if (crt_accum_modulate > 0.001)
+    {
+        float4 prev    = tex2D(crt_accum_samp, texcoord) * crt_accum_modulate;
+        float4 current = tex2D(ReShade::BackBuffer, texcoord) * 0.96;
+        color = max(prev, current);
+    }
+    else
+    {
+        color = tex2D(ReShade::BackBuffer, texcoord);
+    }
+
+    float3 c = color.rgb;
+
+    // -- Wiggle: horizontal UV displacement (NewPixie triple-sine) --
+    // Post-process UV warp on the already-rendered image.
+    if (crt_wiggle_strength > 0.0001)
+    {
+        float t_wig = (float(FRAMECOUNT) - 849.0*floor(float(FRAMECOUNT)/849.0)) * 36.0 * crt_wiggle_speed;
+        float wig   = sin(0.1*t_wig  + texcoord.y*13.0)
+                    * sin(0.23*t_wig + texcoord.y*19.0)
+                    * sin(0.3 + 0.11*t_wig + texcoord.y*23.0);
+        // Scale by reference resolution: same strength = same pixel displacement at any res
+        float wig_scale = 1080.0 / float(BUFFER_HEIGHT);
+        float2 warp_uv = float2(texcoord.x + wig * crt_wiggle_strength * wig_scale, texcoord.y);
+        c = tex2D(ReShade::BackBuffer, warp_uv).rgb;
+    }
+
+    // -- Hum bars: AC mains interference scrolling brightness gradient --
+    if (abs(crt_hum_intensity) > 0.001)
+    {
+        float hum_scroll = frac(texcoord.y + float(FRAMECOUNT) / crt_hum_speed);
+        float hum_mult = (crt_hum_intensity >= 0.0)
+            ? (1.0 - crt_hum_intensity) + crt_hum_intensity * hum_scroll
+            : (1.0 + crt_hum_intensity) + crt_hum_intensity * (hum_scroll - 1.0);
+        c *= hum_mult;
+    }
+
+    // -- Rolling scanlines: sync instability at screen-resolution frequency --
+    // Matches NewPixie scanroll. crt_flicker_strength = speed (0 = disabled/no movement).
+    // When speed > 0, time advances and scanlines scroll. No darkening when disabled.
+    if (crt_flicker_strength > 0.0001)
+    {
+        float t_sc  = (float(FRAMECOUNT) - 640.0*floor(float(FRAMECOUNT)/640.0))
+                    * crt_flicker_strength;
+        // sin oscillates around 0: at t=0, sin=0, scans=0.35+0=0.35 -> darkening.
+        // Shift by pi/2 so at t=0 scans=0.35+0.18=0.53 -> minimal darkening at start.
+        // Use abs() so scans never goes below 0.35 -- avoids systematic darkening.
+        float scans = 0.35 + 0.18 * abs(sin(6.0*t_sc - texcoord.y * float(BUFFER_HEIGHT) * 1.5));
+        c *= pow(scans / 0.53, 0.9); // normalise so peak = 1.0
+    }
+
+    // -- Ghost image: RF reflection/antenna delay --
+    // Matches NewPixie exactly: fixed small displacement + tiny animated wobble.
+    // Base offsets are small (~1-2%) so ghost appears close to source, not far away.
+    // time uses mod(FRAMECOUNT,849)*36 same as wiggle -- slow enough to be visible.
+    if (crt_ghost_strength > 0.0001)
+    {
+        float t_g = (float(FRAMECOUNT) - 849.0*floor(float(FRAMECOUNT)/849.0))
+                  * 36.0 * crt_ghost_speed;
+        // Fixed base offset (small, close to source) + tiny animated wobble
+        // Scale offsets by resolution: NewPixie values tuned for 1080p.
+        // At 4K the same UV offset covers twice as many pixels, so scale down.
+        float ghost_res_scale = 1080.0 / float(BUFFER_HEIGHT);
+        float2 r_uv = texcoord + (float2(-0.014, -0.027)*0.85
+                    + 0.007*float2(0.35*sin(1.0/7.0 + 15.0*texcoord.y + 0.9*t_g),
+                                   0.35*sin(2.0/7.0 + 10.0*texcoord.y + 1.37*t_g))
+                    + float2(0.001, 0.001)) * ghost_res_scale;
+        float2 g_uv = texcoord + (float2(-0.019, -0.020)*0.85
+                    + 0.007*float2(0.35*cos(1.0/9.0 + 15.0*texcoord.y + 0.5*t_g),
+                                   0.35*sin(2.0/9.0 + 10.0*texcoord.y + 1.50*t_g))
+                    + float2(0.000, -0.002)) * ghost_res_scale;
+        float2 b_uv = texcoord + (float2(-0.017, -0.003)*0.85
+                    + 0.007*float2(0.35*sin(2.0/3.0 + 15.0*texcoord.y + 0.7*t_g),
+                                   0.35*cos(2.0/3.0 + 10.0*texcoord.y + 1.63*t_g))
+                    + float2(-0.002, 0.000)) * ghost_res_scale;
+        float3 ghost_r = tex2D(ReShade::BackBuffer, r_uv).rgb * float3(0.5, 0.25, 0.25);
+        float3 ghost_g = tex2D(ReShade::BackBuffer, g_uv).rgb * float3(0.25, 0.5, 0.25);
+        float3 ghost_b = tex2D(ReShade::BackBuffer, b_uv).rgb * float3(0.25, 0.25, 0.5);
+        float luma_i = dot(c, float3(0.299, 0.587, 0.114));
+        float i = (1.0 - luma_i*luma_i) * 0.85 + 0.15;
+        float ghs = crt_ghost_strength;
+        c += (ghs*(1.0-0.299)) * pow(saturate(3.0*ghost_r), 2.0) * i;
+        c += (ghs*(1.0-0.587)) * pow(saturate(3.0*ghost_g), 2.0) * i;
+        c += (ghs*(1.0-0.114)) * pow(saturate(3.0*ghost_b), 2.0) * i;
+    }
+
+    color = float4(c, 1.0);
+}
+#endif // ENABLE_INTERFERENCE
+
+// ============================================================
 // Light Warp pass
 // ============================================================
 #if ENABLE_LIGHT_WARP
@@ -4744,6 +4920,19 @@ technique CRT_Standalone <
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_soop_after_PS;
+    }
+    #endif
+    #if ENABLE_INTERFERENCE
+    pass Interference
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_interference_PS;
+    }
+    pass AccumStore
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_accum_store_PS;
+        RenderTarget = crt_accum_tex;
     }
     #endif
     #if ENABLE_LIGHT_WARP

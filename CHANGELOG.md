@@ -13,6 +13,21 @@ Simulates CRT interlaced mode by alternating which scanline rows are bright and 
 #### Corner Rounding (`ENABLE_CORNER_ROUND=1`)
 Rounded screen mask based on the CRT Guest Advanced corner() function. Three controls: Corner Size (radius), Border Size (independent edge shadow on all four sides simulating bezel housing shadow), and Border Intensity (power curve controlling sharpness). The mask is a luminance multiplier — darkens toward edges and corners naturally, no flat bezel colour needed. No separate colour picker required.
 
+#### Interference System (`ENABLE_INTERFERENCE=1`)
+New dedicated post-process pass running after all CRT rendering — scanlines, mask, glow, halation, grain and HDR pipeline. All signal-level interference effects are correctly applied to the final composited image rather than inside the main CRT pass, since these phenomena (RF pickup, AC mains, antenna reflections) occur in the signal chain before the display. Merges the previous `ENABLE_HUM_BARS` gate — hum bars are now part of `ENABLE_INTERFERENCE`.
+
+Five effects in one pass (all independently controlled, all default to off):
+
+**Hum Bars** — migrated from `ENABLE_HUM_BARS`. Same controls: Intensity and Speed. Now correctly runs post-process.
+
+**Wiggle** — horizontal UV displacement using NewPixie's triple-sine formula (`sin(0.1t) × sin(0.23t) × sin(0.3+0.11t)`). Time base uses `mod(FRAMECOUNT, 849) * 36` matching NewPixie exactly. Both wiggle amplitude and ghost offsets are scaled by `1080 / BUFFER_HEIGHT` so the same slider value produces the same pixel displacement at any resolution.
+
+**Rolling Scanlines** — sine-wave scanline grid at screen-resolution frequency (`sin(6t - uv.y * HEIGHT * 1.5)`) that scrolls vertically. Matches NewPixie scanroll. Fixed 0.18 amplitude. `crt_flicker_strength` = scroll speed. Uses `abs(sin)` and normalises to 1.0 peak so no darkening occurs at speed=0. Resets every 640 frames.
+
+**Accumulate Modulation** — NewPixie-style phosphor afterglow: `max(prev × modulate, current × 0.96)`. AccumStore pass copies the result each frame. Runs first so subsequent effects composite on top of the accumulated image.
+
+**Ghost Image** — per-channel displaced samples from the final backbuffer. Fixed base offsets (`-0.014, -0.027` etc. × 0.85) place the ghost close to source (~1–2% displaced), matching NewPixie's fixed offsets. Small animated wobble from incommensurable sine/cosine pairs. Composited using NewPixie's formula: `pow(saturate(3 × ghost), 2) × ghs × (1 - luma_channel) × i`. Resolution-scaled so effect strength is consistent across 1080p/4K/5K.
+
 #### Hum Bars (`ENABLE_HUM_BARS=1`)
 Simulates AC mains interference — a slow-moving sawtooth brightness gradient matching the Guest Advanced `humbars()` implementation. Two controls: Intensity (positive = dark bar, negative = bright bar) and Speed (50 = 50Hz PAL, 60 = 60Hz NTSC). Applied after vignette, before glow. Off by default, gated by `ENABLE_HUM_BARS` to keep interface clean.
 

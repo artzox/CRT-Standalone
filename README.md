@@ -52,7 +52,6 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `ENABLE_LIGHT_WARP` | 0 | Lightweight barrel/pincushion distortion (only active when ENABLE_GEOMETRY=0) |
 | `ENABLE_INTERLACE` | 0 | Interlaced field simulation — alternates scanline fields each frame |
 | `ENABLE_CORNER_ROUND` | 0 | Rounded screen corners with optional bezel border shadow |
-| `ENABLE_HUM_BARS` | 0 | AC interference hum bar simulation |
 
 ### Resolution / Quality Defines
 
@@ -217,13 +216,6 @@ Edge darkening.
 - **Strength** — overall vignette intensity
 - **Highlight Protection Threshold** — luminance above which highlights are progressively protected from vignette darkening
 - **Highlight Protection Strength** — how strongly highlights are protected. 0.0 = original behaviour (no protection). 1.0 = full protection: pixels at peak brightness receive zero vignette darkening. Use threshold to define where protection starts, strength to control how complete it is
-
-### Hum Bars
-
-Requires `ENABLE_HUM_BARS=1`. Simulates AC mains interference — a slow-moving brightness gradient caused by 50/60Hz electrical pickup in poorly shielded CRTs. Common on older consumer hardware and PAL sets.
-
-- **Hum Bar Intensity** — 0.0 = disabled. Positive = dark band scrolls upward. Negative = bright band scrolls. 0.1–0.2 = subtle, 0.5+ = strong visible banding
-- **Hum Bar Speed** — scroll rate. 50 = typical 50Hz PAL interference. 60 = 60Hz NTSC
 
 ### Film Grain
 - **Animate** — grain changes each frame (recommended)

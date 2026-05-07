@@ -8,7 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
-## [1.0.1] — 2025-05
+## [1.0.2] — 2025-05
 
 ### New Features
 

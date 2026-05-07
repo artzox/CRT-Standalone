@@ -197,6 +197,7 @@ The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through
 - **Beam Sigma Dark (pixels)** — beam width applied to dark pixels (signal near black). Lower = tighter beam with deeper dark gaps between scanlines. Rule of thumb: keep below `scanline_width / 4` for visible gaps. Example: at Scanline Width 4, Dark Sigma 0.5 gives `0.5/4 = 0.125` normalised sigma — deep gap. Dark Sigma 1.5 gives `1.5/4 = 0.375` — gap nearly filled with haze
 - **Beam Sigma Bright (pixels)** — beam width applied to bright pixels (signal near white). Higher = the beam spreads wider, partially filling the scanline gap on bright content. Physically models how a CRT electron beam widens at higher current draw. Should always be ≥ Dark Sigma
 - **Combined behaviour:** mid-grey pixels use the interpolated value between dark and bright sigma. Set both sliders to the same value for uniform beam width across all luminance levels. Set bright higher than dark to get the authentic CRT effect where bright content bleeds more into the gaps
+- **Spot Size / Overbrightness** — luminance-squared brightness boost on peak white content, simulating how a CRT electron beam spot physically grows at high current. Dark pixels unaffected, bright pixels progressively boosted. In HDR pipeline this lifts highlights above SDR ceiling. 0.1–0.3 = subtle, 0.5 = strong
 - **Beam Horizontal Bloom** — simulates electron beam horizontal spreading on very bright scanlines. On real CRTs, high-current beams (saturated whites) spread sideways due to space charge repulsion between electrons. Only active above ~70% luma, with full effect above 90%. 0.0 = off (default). 0.3–0.5 = subtle spreading on bright highlights
 
 **Note on Scanline Width:** The shader snaps `crt_scanline_width` to the nearest integer internally. Non-integer values caused some pixel rows to sample at the bright scanline centre while neighbouring rows sampled at the dark edge, producing oscillating scanline sizes and inconsistent mask darkness as the width slider was moved. Integer-snapping ensures every N rows form one clean scanline period
@@ -251,6 +252,7 @@ Radial colour fringing simulating glass lens dispersion. Zero at screen centre, 
 Simulates CRT electron gun misregistration — independent vertical offset per R/G/B channel. Different from CA (which is radial/lens-based). Both can be used simultaneously.
 
 - **R/G/B Vertical** — uniform vertical offset per channel in pixels
+- **Vertical Beam Spread** — slight per-channel vertical blur simulating the physical offset of the three electron guns in a colour CRT. R and B channels get different spread amounts (R slightly more than B, G unchanged). Very subtle by design — contributes to overall organic feel rather than being identifiable on its own. 0.3–0.7 = authentic range
 - **Red/Blue Horizontal Convergence** — independent horizontal X offset per channel, complementing the existing vertical offsets. Real CRTs had convergence errors in both axes
 - **Radial Misconvergence** — physically based pincushion model: convergence error grows toward the screen edges following Δy = k × x². Zero at centre, maximum at horizontal edges. Red diverges upward, blue downward — matching real pincushion misconvergence geometry. Added on top of uniform offsets. 0.0 = off (default). 0.5–1.0 = subtle authentic edge fringing
 
@@ -320,6 +322,13 @@ Simulates CRT aperture falloff — soft darkening and blurring toward screen edg
 - **Edge Blur Strength** — intensity of the edge blur effect
 - **Edge Blur Max Radius** — maximum blur radius at the screen corners (pixels)
 - **Edge Blur Falloff** — how quickly the blur builds from centre to edge. Higher = more concentrated at edges
+
+### Pre-Emphasis / Bandwidth Limiting
+
+Requires `ENABLE_PREEMPHASIS=1`. Simulates the frequency response of analogue broadcast signal chains, applied before CRT processing.
+
+- **Luma Pre-Emphasis** — boosts high-frequency luma (edge enhancement), simulating broadcast pre-emphasis that made edges appear sharper on CRT receivers. 0.1–0.3 = subtle crispness
+- **Chroma Bandwidth Limit** — softens colour channels horizontally, simulating reduced chroma bandwidth of composite/RF video. Creates characteristic colour bleed of old video recordings. 0.3–0.6 = subtle smear
 
 ### Post-Scanline Softening (Scanline Persistence)
 

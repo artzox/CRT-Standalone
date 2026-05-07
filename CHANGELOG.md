@@ -8,6 +8,34 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.0.1] — 2025-05
+
+### New Features
+
+#### Pre-Emphasis / Bandwidth Limiting (`ENABLE_PREEMPHASIS=1`)
+Simulates analogue broadcast signal frequency response applied before CRT processing. Two controls: Luma Pre-Emphasis (high-frequency edge boost via unsharp-mask, simulating broadcast pre-emphasis) and Chroma Bandwidth Limit (horizontal colour channel softening simulating composite/RF reduced chroma bandwidth).
+
+#### Noise Floor (`ENABLE_NOISE_FLOOR=1`)
+Fixed-pattern thermal noise from CRT electronics, visible on near-black areas. Uses `grain_uhash` for a stable per-pixel pattern that drifts slowly (every 4 frames via `FRAMECOUNT/4` temporal salt) — slower than film grain but not static. Gated below ~50% luma so it's invisible on bright content. Dedicated pass after grain, before phosphor decay.
+
+#### White Point (under Phosphor Profile)
+Chromatic adaptation slider using proper D55/D93 matrices from CRT Guest Advanced. Shifts the display white point from warm D55 (~5500K, older consumer CRTs) through neutral D65 to cool D93 (~9300K, Japanese consumer CRTs). More physically accurate than the existing Colour Temperature slider since it uses full chromatic adaptation rather than a simple linear tint.
+
+#### Spot Size / Overbrightness (under Scanlines)
+Luminance-squared brightness boost on peak white content, simulating the physical growth of the CRT electron beam spot at high current. `boost = 1 + spot_size × luma²` — dark pixels unaffected, highlights progressively brightened. In HDR pipeline (`PIPELINE=1`) this correctly lifts highlights above the SDR ceiling.
+
+#### Vertical Beam Spread (under Convergence)
+Per-channel vertical blur simulating the physical offset of the three electron guns in a colour CRT. R channel gets ±0.5px spread, B gets ±0.3px, G unchanged. Intentionally subtle — contributes to overall organic feel. Only active in `ENABLE_PREBLUR=1` path.
+
+### Bug Fixes
+
+- Phosphor profile matrices: NTSC 1953 and NTSC 1953 D93 were computed with an incorrect white point. Recomputed from first principles using Illuminant C (0.3101, 0.3162) for NTSC 1953 and D93 (0.2848, 0.2932) for the Japanese variant. Other profiles (EBU, P22, SMPTE-C, Trinitron) verified correct
+- Colour temperature redefinition: `crt_colour_temp` was being declared twice after the white point addition. Resolved by renaming the new chromatic adaptation control to `crt_white_point`
+- Matrix ternary operator: HLSL does not support `?:` on `float3x3` types in all shader models. Replaced with `if/else` branch
+- `static const` inside function scope: `kXYZ_to_sRGB` was declared inside an `if` block which is invalid in FXC. Moved to file scope
+
+---
+
 ## [1.0.0] — 2025-05 — Initial public release
 
 First public release. Feature-complete CRT emulation shader for ReShade targeting QD-OLED and high-resolution SDR displays.

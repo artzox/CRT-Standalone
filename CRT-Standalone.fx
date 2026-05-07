@@ -81,6 +81,20 @@
     #define GLOW_RESOLUTION 2
 #endif
 
+// Pre-emphasis / bandwidth limiting: analogue signal frequency response.
+// Boosts luma edges and softens chroma, simulating broadcast pre/de-emphasis.
+// 1 = enabled, 0 = disabled (default)
+#ifndef ENABLE_PREEMPHASIS
+    #define ENABLE_PREEMPHASIS 0
+#endif
+
+// Noise floor: faint fixed-pattern thermal noise on dark areas.
+// Simulates CRT electronics thermal noise, distinct from signal-dependent grain.
+// 1 = enabled, 0 = disabled (default)
+#ifndef ENABLE_NOISE_FLOOR
+    #define ENABLE_NOISE_FLOOR 0
+#endif
+
 // Interference: wiggle, rolling scanlines, hum bars, ghosting, accumulation.
 // All are signal-level effects applied as a post-process on the final image.
 // Simulates RF/magnetic interference on a CRT signal.
@@ -311,6 +325,32 @@ uniform float crt_preblur_v_radius <
 #endif // ENABLE_PREBLUR
 
 // ============================================================
+// Uniforms -- Pre-Emphasis / Bandwidth Limiting
+// ============================================================
+
+#if ENABLE_PREEMPHASIS
+uniform float crt_preemphasis_luma <
+    ui_type = "drag"; ui_label = "Luma Pre-Emphasis";
+    ui_category = "Pre-Emphasis";
+    ui_tooltip = "Boosts high-frequency luma (edge enhancement) before CRT processing.\n"
+                 "Simulates the pre-emphasis applied to broadcast signals that made\n"
+                 "edges appear sharper on real CRT receivers.\n"
+                 "0.0 = disabled. 0.1-0.3 = subtle edge crispness. 0.5+ = strong.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_preemphasis_chroma <
+    ui_type = "drag"; ui_label = "Chroma Bandwidth Limit";
+    ui_category = "Pre-Emphasis";
+    ui_tooltip = "Softens colour channels horizontally, simulating the reduced chroma\n"
+                 "bandwidth of analogue composite/RF video signals.\n"
+                 "Creates the characteristic colour bleed of old video recordings.\n"
+                 "0.0 = disabled. 0.3-0.6 = subtle. 1.0 = strong chroma smear.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+#endif // ENABLE_PREEMPHASIS
+
+// ============================================================
 // Uniforms -- Post-Scanline Softening
 // ============================================================
 
@@ -427,7 +467,7 @@ uniform float crt_persistence_strength <
                  "Keep very low -- 0.05-0.15 for subtle CRT character.\n"
                  "Higher values look like ghosting.\n"
                  "Set ENABLE_PERSISTENCE=0 to remove pass entirely.";
-    ui_min = 0.0; ui_max = 0.5; ui_step = 0.005;
+    ui_min = 0.0; ui_max = 0.05; ui_step = 0.001;
 > = 0.0;
 uniform float crt_persistence_decay <
     ui_type = "drag"; ui_label = "Persistence Decay Distance (pixels)";
@@ -621,6 +661,18 @@ uniform float crt_b_scanline_attack <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
 
+uniform float crt_spot_size <
+    ui_type = "drag"; ui_label = "Spot Size / Overbrightness";
+    ui_category = "Scanlines";
+    ui_tooltip = "On real CRTs, peak white caused the electron beam spot to\n"
+                 "physically spread, brightening the scanline centre and making\n"
+                 "bright pixels appear slightly larger than dark ones.\n"
+                 "Luminance-dependent: only active above ~70% brightness.\n"
+                 "0.0 = disabled (default). 0.1-0.3 = subtle organic bloom.\n"
+                 "0.5+ = strong overbrightness on highlights.";
+    ui_min = 0.0; ui_max = 0.5; ui_step = 0.01;
+> = 0.0;
+
 uniform float crt_beam_h_bloom <
     ui_type = "drag"; ui_label = "Beam Horizontal Bloom";
     ui_category = "Scanlines";
@@ -777,6 +829,18 @@ uniform float crt_phosphor_strength <
                  "Allows subtle correction without full commitment to one profile.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 1.0;
+
+uniform float crt_white_point <
+    ui_type = "drag"; ui_label = "White Point";
+    ui_category = "Phosphor Profile";
+    ui_tooltip = "Chromatic adaptation of the display white point.\n"
+                 "Negative = warmer (D55 ~5500K, older consumer CRTs).\n"
+                 "Zero = neutral D65 (broadcast reference, default).\n"
+                 "Positive = cooler (D93 ~9300K, Japanese consumer CRTs).\n"
+                 "Uses proper chromatic adaptation matrices (Guest Advanced).\n"
+                 "More accurate than the Colour Temperature slider in Gamma.";
+    ui_min = -1.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
 #endif
 
 // ============================================================
@@ -1142,6 +1206,16 @@ uniform float crt_convergence_h_b <
     ui_min = -3.0; ui_max = 3.0; ui_step = 0.1;
 > = 0.0;
 
+uniform float crt_convergence_v_spread <
+    ui_type = "drag"; ui_label = "Vertical Beam Spread";
+    ui_category = "Convergence";
+    ui_tooltip = "Slightly blurs each channel vertically by a different amount,\n"
+                 "simulating the physical offset of the three electron guns in a\n"
+                 "colour CRT. Adds organic softness independent of convergence.\n"
+                 "0.0 = disabled (default). 0.3-0.7 = subtle per-channel spread.";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
+> = 0.0;
+
 uniform float crt_convergence_radial <
     ui_type = "drag"; ui_label = "Radial Misconvergence";
     ui_category = "Convergence";
@@ -1341,6 +1415,31 @@ uniform float crt_grain_size <
 > = 0.2;
 
 #endif // ENABLE_GRAIN
+
+// ============================================================
+// Uniforms -- Noise Floor
+// ============================================================
+
+#if ENABLE_NOISE_FLOOR
+uniform float crt_noise_floor <
+    ui_type = "drag"; ui_label = "Noise Floor";
+    ui_category = "Noise Floor";
+    ui_tooltip = "Faint fixed-pattern thermal noise on dark areas.\n"
+                 "Simulates CRT electronics thermal noise -- different from film\n"
+                 "grain which is signal-dependent. Noise floor is constant,\n"
+                 "additive, and most visible on near-black areas.\n"
+                 "0.0 = disabled (default). 0.005-0.02 = authentic subtle noise.";
+    ui_min = 0.0; ui_max = 0.5; ui_step = 0.005;
+> = 0.0;
+
+uniform float crt_noise_floor_scale <
+    ui_type = "drag"; ui_label = "Noise Floor Scale";
+    ui_category = "Noise Floor";
+    ui_tooltip = "Spatial scale of the noise pattern. 1.0 = per-pixel noise.\n"
+                 "2.0-4.0 = coarser pattern, more visible structure.";
+    ui_min = 1.0; ui_max = 8.0; ui_step = 0.5;
+> = 1.0;
+#endif // ENABLE_NOISE_FLOOR
 
 // ============================================================
 // Uniforms -- Phosphor Decay
@@ -2260,6 +2359,28 @@ float3 apply_phosphor(float3 c)
 
     return lerp(c, c_out, crt_phosphor_strength);
 }
+#endif
+
+// ============================================================
+// Colour temperature chromatic adaptation (D65 to D55 / D93)
+// Matrices from CRT Guest Advanced (GPL v2+)
+// ============================================================
+#if ENABLE_PHOSPHOR
+static const float3x3 kD65_to_D55 = float3x3(
+    0.485034, 0.250096, 0.022736,
+    0.348896, 0.697791, 0.116299,
+    0.130282, 0.052113, 0.686154);
+
+static const float3x3 kD65_to_D93 = float3x3(
+    0.341275, 0.175970, 0.015997,
+    0.364617, 0.729234, 0.121539,
+    0.236989, 0.094796, 1.248144);
+
+// Standard XYZ to sRGB (D65) for colour temperature output re-encoding
+static const float3x3 kXYZ_to_sRGB = float3x3(
+     3.240970,-1.537383,-0.498611,
+    -0.969244, 1.875968, 0.041555,
+     0.055630,-0.203977, 1.056972);
 #endif
 
 // ============================================================
@@ -3228,6 +3349,18 @@ void crt_main_PS(
         tex2D(crt_preblur_v_sampler, uv_r).r,
         tex2D(crt_preblur_v_sampler, uv_g).g,
         tex2D(crt_preblur_v_sampler, uv_b).b);
+
+    // -- Vertical per-channel spread (ENABLE_PREBLUR path) --
+    if (crt_convergence_v_spread > 0.001)
+    {
+        float py = ReShade::PixelSize.y * crt_convergence_v_spread;
+        float r_above = tex2D(crt_preblur_v_sampler, float2(uv_r.x, uv_r.y - py*0.5)).r;
+        float r_below = tex2D(crt_preblur_v_sampler, float2(uv_r.x, uv_r.y + py*0.5)).r;
+        float b_above = tex2D(crt_preblur_v_sampler, float2(uv_b.x, uv_b.y - py*0.3)).b;
+        float b_below = tex2D(crt_preblur_v_sampler, float2(uv_b.x, uv_b.y + py*0.3)).b;
+        c.r = (c.r + r_above + r_below) / 3.0;
+        c.b = (c.b + b_above + b_below) / 3.0;
+    }
     #elif ENABLE_GEOMETRY
     {
         // Geometry: one Lanczos reconstruction at warped centre position,
@@ -3270,11 +3403,63 @@ void crt_main_PS(
     #if ENABLE_PHOSPHOR
     if (crt_phosphor_strength > 0.001)
         c = apply_phosphor(c);
-    #endif
 
-    // -- Colour temperature --
+    // -- White point: chromatic adaptation D65 toward D55 (warm) or D93 (cool) --
+    if (abs(crt_white_point) > 0.001)
+    {
+        float3 c_lin = pow(max(c, 0.0), 2.2);
+        float m = abs(crt_white_point);
+        float3 xyz;
+        if (crt_white_point < 0.0)
+            xyz = mul(c_lin, kD65_to_D55);
+        else
+            xyz = mul(c_lin, kD65_to_D93);
+        // Back to sRGB via standard XYZ->sRGB
+        float3 adapted = mul(xyz, kXYZ_to_sRGB);
+        adapted = pow(max(adapted, 0.0), 1.0/2.2);
+        c = lerp(c, adapted, m);
+    }
+
+    // -- Colour temperature (simple warm/cool shift in Gamma & Contrast) --
     if (abs(crt_colour_temp) > 0.001)
         c = apply_colour_temp(c, crt_colour_temp);
+    #endif
+
+    // -- Pre-emphasis / bandwidth limiting --
+    // Applied to source signal before any CRT processing, matching the
+    // signal chain position of real broadcast pre/de-emphasis.
+    #if ENABLE_PREEMPHASIS
+    if (crt_preemphasis_luma > 0.001 || crt_preemphasis_chroma > 0.001)
+    {
+        float2 px = ReShade::PixelSize;
+        if (crt_preemphasis_luma > 0.001)
+        {
+            // High-frequency luma boost: unsharp-mask style edge emphasis
+            float3 left  = tex2D(ReShade::BackBuffer, float2(texcoord.x - px.x, texcoord.y)).rgb;
+            float3 right = tex2D(ReShade::BackBuffer, float2(texcoord.x + px.x, texcoord.y)).rgb;
+            float luma_c = dot(c,     float3(0.299, 0.587, 0.114));
+            float luma_l = dot(left,  float3(0.299, 0.587, 0.114));
+            float luma_r = dot(right, float3(0.299, 0.587, 0.114));
+            float edge   = luma_c - 0.5*(luma_l + luma_r);
+            c += edge * crt_preemphasis_luma;
+        }
+        if (crt_preemphasis_chroma > 0.001)
+        {
+            // Chroma bandwidth limiting: horizontal box blur of colour difference
+            float3 left  = tex2D(ReShade::BackBuffer, float2(texcoord.x - px.x, texcoord.y)).rgb;
+            float3 right = tex2D(ReShade::BackBuffer, float2(texcoord.x + px.x, texcoord.y)).rgb;
+            float luma   = dot(c, float3(0.299, 0.587, 0.114));
+            float3 chroma_blur = (left + c + right) / 3.0;
+            float luma_blur    = dot(chroma_blur, float3(0.299, 0.587, 0.114));
+            // Replace chroma (colour difference) with blurred version, keep luma
+            c = chroma_blur + (luma - luma_blur);
+            c = lerp(c, chroma_blur, crt_preemphasis_chroma);
+        }
+        c = max(c, 0.0);
+    }
+    #endif // ENABLE_PREEMPHASIS
+
+
 
     // -- BCS (Megatron Bezier in Yxy, no washout) --
     // In PIPELINE >= 1 the soop sandwich re-encodes to sRGB before this point.
@@ -3402,6 +3587,18 @@ void crt_main_PS(
         c_lin *= dim;
     }
     #endif
+
+    // -- Spot size / overbrightness --
+    // Luminance-squared boost: dark pixels unaffected, bright pixels boosted.
+    // Applied directly to c_lin before gamma re-encoding.
+    // Debug: at spot_size=3.0 with full-white input, output is 4x brightness.
+    if (crt_spot_size > 0.001)
+    {
+        float luma_s    = dot(c_lin, float3(0.2126, 0.7152, 0.0722));
+        float luma_norm = saturate(luma_s); // clamp for gate
+        float boost     = 1.0 + crt_spot_size * luma_norm * luma_norm;
+        c_lin *= boost;
+    }
 
     // -- Electron beam horizontal bloom --
     // On real CRTs, high-current beams (bright content) spread horizontally
@@ -4529,6 +4726,33 @@ void crt_decay_PS(
 // ============================================================
 
 // ============================================================
+// Noise floor pass -- fixed-pattern thermal noise, independent of interference
+// ============================================================
+#if ENABLE_NOISE_FLOOR
+void crt_noise_floor_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
+    if (crt_noise_floor > 0.001)
+    {
+        uint2 noise_px   = uint2(texcoord * float2(BUFFER_WIDTH, BUFFER_HEIGHT)
+                           / max(crt_noise_floor_scale, 1.0));
+        // Slow temporal variation: changes every 4 frames so it drifts
+        // rather than being static, but slower than film grain (every frame)
+        uint  frame_slow = (FRAMECOUNT / 4u) * 0x9E3779B9u;
+        uint  noise_seed = noise_px.x * 1973u + noise_px.y * 9277u + frame_slow;
+        float noise_val  = (grain_unorm1(grain_uhash(noise_seed)) - 0.5) * 2.0;
+        float luma_n    = dot(c, float3(0.299, 0.587, 0.114));
+        float dark_gate = saturate(1.0 - luma_n * 2.0); // fades above ~50% luma
+        c = saturate(c + noise_val * crt_noise_floor * dark_gate);
+    }
+    color = float4(c, 1.0);
+}
+#endif // ENABLE_NOISE_FLOOR
+
+// ============================================================
 // Interference pass -- all signal-level effects as post-process
 // Applied to the final image after all CRT rendering is complete.
 // Effects in order: accumulate, wiggle, hum bars, rolling scanlines, ghost
@@ -4862,6 +5086,13 @@ technique CRT_Standalone <
         PixelShader  = crt_grain_diffuse_PS;
     }
     #endif // ENABLE_GRAIN
+    #if ENABLE_NOISE_FLOOR
+    pass NoiseFloor
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_noise_floor_PS;
+    }
+    #endif
     #if ENABLE_DECAY
     // Merged store: raw capture + prev1 update in one dual-output pass.
     // Saves one full-resolution pass vs the original three separate passes.

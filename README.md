@@ -323,12 +323,12 @@ Simulates CRT aperture falloff — soft darkening and blurring toward screen edg
 - **Edge Blur Max Radius** — maximum blur radius at the screen corners (pixels)
 - **Edge Blur Falloff** — how quickly the blur builds from centre to edge. Higher = more concentrated at edges
 
-### Pre-Emphasis / Bandwidth Limiting
+### Edge Feedback
 
-Requires `ENABLE_PREEMPHASIS=1`. Simulates the frequency response of analogue broadcast signal chains, applied before CRT processing.
+Requires `ENABLE_EDGE_FEEDBACK=1`. Amplifies CRT edge and peripheral effects by comparing the current pixel against its neighbours from the previous rendered frame. The difference captures accumulated CRT processing — mask transitions, scanline gaps, vignette gradient, geometry warp — and feeds it back as edge enhancement. Most effective with `ENABLE_GEOMETRY=1`. Motion may introduce slight ghosting at high strength values.
 
-- **Luma Pre-Emphasis** — boosts high-frequency luma (edge enhancement), simulating broadcast pre-emphasis that made edges appear sharper on CRT receivers. 0.1–0.3 = subtle crispness
-- **Chroma Bandwidth Limit** — softens colour channels horizontally, simulating reduced chroma bandwidth of composite/RF video. Creates characteristic colour bleed of old video recordings. 0.3–0.6 = subtle smear
+- **Edge Feedback Strength** — amplifies luma edges and screen-peripheral CRT effects. Strongest at screen edges and curved geometry areas. 0.1–0.3 = subtle, 0.5+ = strong
+- **Chroma Diffusion** — softens colour channels horizontally using the previous frame as reference. 0.3–0.6 = subtle
 
 ### Post-Scanline Softening (Scanline Persistence)
 

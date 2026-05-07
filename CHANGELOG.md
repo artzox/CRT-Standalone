@@ -12,8 +12,8 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ### New Features
 
-#### Pre-Emphasis / Bandwidth Limiting (`ENABLE_PREEMPHASIS=1`)
-Simulates analogue broadcast signal frequency response applied before CRT processing. Two controls: Luma Pre-Emphasis (high-frequency edge boost via unsharp-mask, simulating broadcast pre-emphasis) and Chroma Bandwidth Limit (horizontal colour channel softening simulating composite/RF reduced chroma bandwidth).
+#### Edge Feedback (`ENABLE_EDGE_FEEDBACK=1`)
+Amplifies CRT edge and peripheral effects by comparing the current pixel against its neighbours from the previous rendered frame. The cross-frame difference captures accumulated CRT processing (mask, scanlines, vignette, geometry warp) and feeds it back as edge enhancement. Originally intended as broadcast pre-emphasis simulation — the unexpected cross-frame interaction produces a more interesting and distinctive analogue effect. Most effective with `ENABLE_GEOMETRY=1`. Two controls: Edge Feedback Strength (luma edge amplification) and Chroma Diffusion (horizontal colour softening using previous frame reference).
 
 #### Noise Floor (`ENABLE_NOISE_FLOOR=1`)
 Fixed-pattern thermal noise from CRT electronics, visible on near-black areas. Uses `grain_uhash` for a stable per-pixel pattern that drifts slowly (every 4 frames via `FRAMECOUNT/4` temporal salt) — slower than film grain but not static. Gated below ~50% luma so it's invisible on bright content. Dedicated pass after grain, before phosphor decay.

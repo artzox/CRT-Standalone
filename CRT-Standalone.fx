@@ -81,11 +81,12 @@
     #define GLOW_RESOLUTION 2
 #endif
 
-// Pre-emphasis / bandwidth limiting: analogue signal frequency response.
-// Boosts luma edges and softens chroma, simulating broadcast pre/de-emphasis.
-// 1 = enabled, 0 = disabled (default)
-#ifndef ENABLE_PREEMPHASIS
-    #define ENABLE_PREEMPHASIS 0
+// Edge Feedback: cross-frame CRT edge and peripheral enhancement.
+// Samples previous frame backbuffer as neighbour reference, amplifying
+// differences caused by CRT processing (mask, scanlines, vignette, geometry).
+// Most effective with ENABLE_GEOMETRY=1. 1 = enabled, 0 = disabled (default)
+#ifndef ENABLE_EDGE_FEEDBACK
+    #define ENABLE_EDGE_FEEDBACK 0
 #endif
 
 // Noise floor: faint fixed-pattern thermal noise on dark areas.
@@ -328,27 +329,30 @@ uniform float crt_preblur_v_radius <
 // Uniforms -- Pre-Emphasis / Bandwidth Limiting
 // ============================================================
 
-#if ENABLE_PREEMPHASIS
-uniform float crt_preemphasis_luma <
-    ui_type = "drag"; ui_label = "Luma Pre-Emphasis";
-    ui_category = "Pre-Emphasis";
-    ui_tooltip = "Boosts high-frequency luma (edge enhancement) before CRT processing.\n"
-                 "Simulates the pre-emphasis applied to broadcast signals that made\n"
-                 "edges appear sharper on real CRT receivers.\n"
-                 "0.0 = disabled. 0.1-0.3 = subtle edge crispness. 0.5+ = strong.";
+#if ENABLE_EDGE_FEEDBACK
+uniform float crt_edge_feedback_luma <
+    ui_type = "drag"; ui_label = "Edge Feedback Strength";
+    ui_category = "Edge Feedback";
+    ui_tooltip = "Amplifies CRT edge and peripheral effects by comparing the current\n"
+                 "pixel against its neighbours from the previous rendered frame.\n"
+                 "The difference captures accumulated CRT processing (mask transitions,\n"
+                 "scanline gaps, vignette gradient) and feeds it back as edge enhancement.\n"
+                 "Effect is strongest at screen edges and geometry-warped areas.\n"
+                 "Most effective with ENABLE_GEOMETRY=1.\n"
+                 "0.0 = disabled. 0.1-0.3 = subtle. 0.5+ = strong.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.0;
 
-uniform float crt_preemphasis_chroma <
-    ui_type = "drag"; ui_label = "Chroma Bandwidth Limit";
-    ui_category = "Pre-Emphasis";
-    ui_tooltip = "Softens colour channels horizontally, simulating the reduced chroma\n"
-                 "bandwidth of analogue composite/RF video signals.\n"
-                 "Creates the characteristic colour bleed of old video recordings.\n"
-                 "0.0 = disabled. 0.3-0.6 = subtle. 1.0 = strong chroma smear.";
+uniform float crt_edge_feedback_chroma <
+    ui_type = "drag"; ui_label = "Chroma Diffusion";
+    ui_category = "Edge Feedback";
+    ui_tooltip = "Softens colour channels horizontally using the previous frame as\n"
+                 "reference. Creates a subtle chroma diffusion on moving content.\n"
+                 "Most effective with ENABLE_GEOMETRY=1.\n"
+                 "0.0 = disabled. 0.3-0.6 = subtle. 1.0 = strong diffusion.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.0;
-#endif // ENABLE_PREEMPHASIS
+#endif // ENABLE_EDGE_FEEDBACK
 
 // ============================================================
 // Uniforms -- Post-Scanline Softening
@@ -3428,36 +3432,34 @@ void crt_main_PS(
     // -- Pre-emphasis / bandwidth limiting --
     // Applied to source signal before any CRT processing, matching the
     // signal chain position of real broadcast pre/de-emphasis.
-    #if ENABLE_PREEMPHASIS
-    if (crt_preemphasis_luma > 0.001 || crt_preemphasis_chroma > 0.001)
+    #if ENABLE_EDGE_FEEDBACK
+    if (crt_edge_feedback_luma > 0.001 || crt_edge_feedback_chroma > 0.001)
     {
-        float2 px = ReShade::PixelSize;
-        if (crt_preemphasis_luma > 0.001)
+        // Cross-frame edge feedback: compare current pixel against previous
+        // frame neighbours. Difference captures accumulated CRT processing
+        // (mask, scanlines, vignette, warp) and feeds it back as enhancement.
+        float2 px    = ReShade::PixelSize;
+        float3 left  = tex2D(ReShade::BackBuffer, float2(texcoord.x - px.x, texcoord.y)).rgb;
+        float3 right = tex2D(ReShade::BackBuffer, float2(texcoord.x + px.x, texcoord.y)).rgb;
+        if (crt_edge_feedback_luma > 0.001)
         {
-            // High-frequency luma boost: unsharp-mask style edge emphasis
-            float3 left  = tex2D(ReShade::BackBuffer, float2(texcoord.x - px.x, texcoord.y)).rgb;
-            float3 right = tex2D(ReShade::BackBuffer, float2(texcoord.x + px.x, texcoord.y)).rgb;
             float luma_c = dot(c,     float3(0.299, 0.587, 0.114));
             float luma_l = dot(left,  float3(0.299, 0.587, 0.114));
             float luma_r = dot(right, float3(0.299, 0.587, 0.114));
             float edge   = luma_c - 0.5*(luma_l + luma_r);
-            c += edge * crt_preemphasis_luma;
+            c += edge * crt_edge_feedback_luma;
         }
-        if (crt_preemphasis_chroma > 0.001)
+        if (crt_edge_feedback_chroma > 0.001)
         {
-            // Chroma bandwidth limiting: horizontal box blur of colour difference
-            float3 left  = tex2D(ReShade::BackBuffer, float2(texcoord.x - px.x, texcoord.y)).rgb;
-            float3 right = tex2D(ReShade::BackBuffer, float2(texcoord.x + px.x, texcoord.y)).rgb;
-            float luma   = dot(c, float3(0.299, 0.587, 0.114));
+            float luma         = dot(c, float3(0.299, 0.587, 0.114));
             float3 chroma_blur = (left + c + right) / 3.0;
             float luma_blur    = dot(chroma_blur, float3(0.299, 0.587, 0.114));
-            // Replace chroma (colour difference) with blurred version, keep luma
             c = chroma_blur + (luma - luma_blur);
-            c = lerp(c, chroma_blur, crt_preemphasis_chroma);
+            c = lerp(c, chroma_blur, crt_edge_feedback_chroma);
         }
         c = max(c, 0.0);
     }
-    #endif // ENABLE_PREEMPHASIS
+    #endif // ENABLE_EDGE_FEEDBACK
 
 
 

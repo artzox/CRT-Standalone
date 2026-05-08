@@ -313,7 +313,11 @@ Effects run in this order within the pass: accumulate modulation → wiggle → 
 - **Rolling Scanlines Speed** — sine-wave scanline grid at screen-resolution frequency that scrolls vertically, simulating sync instability. Fixed 0.18 amplitude matching NewPixie. Speed=0 disables. Resets every 640 frames
 - **Accumulate Modulation** — phosphor afterglow accumulation. Each frame blends `max(prev × modulate, current × 0.96)`. Bright content trails across frames. 0.5–0.7 = subtle trail, 0.9+ = heavy persistence
 - **Ghost Strength** — chromatic ghost image displaced slightly from the source, simulating RF reflections in an antenna cable arriving delayed. Each R/G/B channel samples at a fixed small offset plus a tiny animated wobble. Scaled by resolution — at 4K/5K start around 0.005–0.01. NewPixie hardcoded value is 0.15 at 1080p
-- **Ghost Speed** — speed of the animated wobble on the ghost position. Does not affect the fixed base displacement
+- **Ghost Speed**
+- **Scanline Jitter** — per-scanline vertical displacement in pixel units. Uses a slow per-row hash (`FRAMECOUNT/3`) so it drifts rather than being static. 0.3–0.8 = subtle organic instability, 1.0–2.0 = noticeable. Needs `ENABLE_INTERFERENCE=1`
+- **H-Sync Instability** — probabilistic per-row horizontal displacement simulating weak H-sync lock. Two controls: Strength (displacement magnitude, resolution-scaled) and Glitch Rate (probability per row per frame, 0.02 = 2% of rows). Slightly stronger near top of screen. Needs `ENABLE_INTERFERENCE=1`
+- **Dot Crawl** — NTSC composite colour subcarrier interference pattern at luma-chroma boundaries. Animated diagonal noise characteristic of 240p composite content. Needs `ENABLE_INTERFERENCE=1`
+- **Magnetic Interference** — persistent radial hue rotation around a user-positioned source point, simulating a magnet or speaker near the CRT. Five controls: Strength, Source X/Y position, Radius, and Animation Speed. Needs `ENABLE_INTERFERENCE=1` — speed of the animated wobble on the ghost position. Does not affect the fixed base displacement
 
 ### Edge Blur
 
@@ -323,12 +327,35 @@ Simulates CRT aperture falloff — soft darkening and blurring toward screen edg
 - **Edge Blur Max Radius** — maximum blur radius at the screen corners (pixels)
 - **Edge Blur Falloff** — how quickly the blur builds from centre to edge. Higher = more concentrated at edges
 
+### Tube Diffuse
+
+Requires `ENABLE_TUBE_DIFFUSE=1`. Ambient glow from phosphors scattering through the CRT glass. A heavily blurred copy of the final image composited additively at low opacity. Creates faint warmth proportional to scene brightness — different from halation which halos bright elements. Based on Mega Bezel fullscreen glow concept.
+
+- **Tube Diffuse Strength** — 0.02–0.06 = subtle ambient warmth, 0.15+ = visible
+- **Tube Diffuse Gamma** — higher = effect concentrated on brighter content
+
+### Screen Reflection
+
+Requires `ENABLE_SCREEN_REFLECT=1`. Faint blurred self-reflection at screen edges, simulating light bouncing between the thick CRT glass and the tube. Most visible on dark backgrounds with bright content near the edges.
+
+- **Reflection Strength** — 0.02–0.05 = subtle, 0.1+ = visible
+- **Reflection Gamma** — concentrates reflection on brighter content
+- **Edge Fade** — controls how far inward the reflection extends from screen edges
+
 ### Edge Feedback
 
 Requires `ENABLE_EDGE_FEEDBACK=1`. Amplifies CRT edge and peripheral effects by comparing the current pixel against its neighbours from the previous rendered frame. The difference captures accumulated CRT processing — mask transitions, scanline gaps, vignette gradient, geometry warp — and feeds it back as edge enhancement. Most effective with `ENABLE_GEOMETRY=1`. Motion may introduce slight ghosting at high strength values.
 
 - **Edge Feedback Strength** — amplifies luma edges and screen-peripheral CRT effects. Strongest at screen edges and curved geometry areas. 0.1–0.3 = subtle, 0.5+ = strong
 - **Chroma Diffusion** — softens colour channels horizontally using the previous frame as reference. 0.3–0.6 = subtle
+
+### Composite Video
+
+Requires `ENABLE_COMPOSITE=1`. Processes luma and chroma independently, simulating the reduced chroma bandwidth of NTSC/PAL composite/RF video. Integrated into the main CRT pass and operates on the correct source frame with proper UV mapping.
+
+- **Chroma Blur Width** — horizontal blur applied to colour channels only. Luma stays sharp while colours bleed. 1.0–2.0 = authentic composite look, 4.0+ = heavy RF degradation
+- **Chroma Phase Offset** — horizontal offset of colour channels relative to luma, simulating composite signal delay
+- **Luma Sharpness Boost** — compensating unsharp mask on luma only, giving crisp edges alongside soft colour bleed
 
 ### Post-Scanline Softening (Scanline Persistence)
 
@@ -393,7 +420,8 @@ Requires `ENABLE_CORNER_ROUND=1`. Rounded screen mask with optional bezel border
 
 - **Corner Size** — radius of rounded corners. 0.0 = square. 0.05–0.10 = subtle. 0.15–0.25 = strong consumer TV rounding
 - **Border Size** — adds a darkened shadow along all four screen edges independently of corner rounding, simulating the bezel shadow cast by the CRT housing. 0.0 = no border. 0.5–1.0 = subtle edge shadow
-- **Border Intensity** — power curve applied to the corner/border mask. Higher = sharper, more contrasty edge. Lower = soft gradual transition. 2.0 = default (sharp)
+- **Border Intensity**
+- **Corner Shadow** — sharp darkening at extreme screen corners simulating the shadow cast by the CRT bezel pressing against the tube. Independent of corner rounding geometry. Requires `ENABLE_CORNER_ROUND=1` — power curve applied to the corner/border mask. Higher = sharper, more contrasty edge. Lower = soft gradual transition. 2.0 = default (sharp)
 
 The mask is a luminance multiplier — it darkens toward the edges and corners rather than filling with a flat colour, giving a natural bezel appearance.
 

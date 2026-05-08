@@ -19,7 +19,7 @@ Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 THIRD-PARTY COMPONENTS
 -------------------------------------------------------------------------------
 
-CRT Guest Advanced (corner function, hum bars, scanline beam shape)
+CRT Guest Advanced (corner function, scanline beam shape, chromatic adaptation)
   Copyright (C) 2018-2025 guest(r)
   Licensed under GNU General Public License v2 or later
 
@@ -39,6 +39,13 @@ Variable MPRT Algorithm
 CAS (Contrast Adaptive Sharpening)
   Copyright (C) 2019 Advanced Micro Devices, Inc.
   Licensed under MIT License
+
+Mega Bezel (tube diffuse and screen reflection architecture concepts)
+  Copyright (C) HyperspaceMadness
+  Licensed under GNU General Public License v3
+  Note: concepts and architecture only — no code copied. GPL v2+ compatibility
+  maintained as the Mega Bezel licence is GPLv3-only (not v2+). Our
+  independent implementation is licensed under GPL v2+.
 
 Film grain (Poisson variance approach)
   Inspired by METEOR shader by Marty McModding

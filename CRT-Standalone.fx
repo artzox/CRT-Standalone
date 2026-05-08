@@ -96,6 +96,27 @@
     #define ENABLE_NOISE_FLOOR 0
 #endif
 
+// Tube diffuse: ambient glow from screen phosphors scattering through the glass.
+// 1 = enabled, 0 = disabled (default)
+#ifndef ENABLE_TUBE_DIFFUSE
+    #define ENABLE_TUBE_DIFFUSE 0
+#endif
+
+// Composite video simulation: Y/C separation with independent luma/chroma bandwidth.
+// 1 = enabled, 0 = disabled (default)
+#ifndef ENABLE_COMPOSITE
+    #define ENABLE_COMPOSITE 0
+#endif
+
+// Screen reflection: faint blurred self-reflection at screen edges.
+// Simulates light bouncing between the thick CRT glass and the tube.
+// 1 = enabled, 0 = disabled (default)
+#ifndef ENABLE_SCREEN_REFLECT
+    #define ENABLE_SCREEN_REFLECT 0
+#endif
+
+// Tube diffuse: ambient phosphor scatter glow through the CRT glass.
+// 1 = enabled, 0 = disabled (default)
 // Interference: wiggle, rolling scanlines, hum bars, ghosting, accumulation.
 // All are signal-level effects applied as a post-process on the final image.
 // Simulates RF/magnetic interference on a CRT signal.
@@ -326,33 +347,41 @@ uniform float crt_preblur_v_radius <
 #endif // ENABLE_PREBLUR
 
 // ============================================================
-// Uniforms -- Pre-Emphasis / Bandwidth Limiting
+// Uniforms -- Composite Video
 // ============================================================
 
-#if ENABLE_EDGE_FEEDBACK
-uniform float crt_edge_feedback_luma <
-    ui_type = "drag"; ui_label = "Edge Feedback Strength";
-    ui_category = "Edge Feedback";
-    ui_tooltip = "Amplifies CRT edge and peripheral effects by comparing the current\n"
-                 "pixel against its neighbours from the previous rendered frame.\n"
-                 "The difference captures accumulated CRT processing (mask transitions,\n"
-                 "scanline gaps, vignette gradient) and feeds it back as edge enhancement.\n"
-                 "Effect is strongest at screen edges and geometry-warped areas.\n"
-                 "Most effective with ENABLE_GEOMETRY=1.\n"
+#if ENABLE_COMPOSITE
+uniform float crt_composite_chroma_blur <
+    ui_type = "drag"; ui_label = "Chroma Blur Width";
+    ui_category = "Composite Video";
+    ui_tooltip = "Horizontal blur applied to colour channels independently of luma.\n"
+                 "Models NTSC/PAL reduced chroma bandwidth (~1.5MHz vs 4MHz luma).\n"
+                 "Gives soft-colours-sharp-edges composite look.\n"
+                 "At 4K: 1.0 = ~2px blur. 3.0 = ~6px. 5.0 = ~10px colour bleed.\n"
+                 "0.0 = disabled. 1.0-2.0 = authentic. 4.0+ = heavy RF degradation.";
+    ui_min = 0.0; ui_max = 8.0; ui_step = 0.25;
+> = 0.0;
+
+uniform float crt_composite_chroma_phase <
+    ui_type = "drag"; ui_label = "Chroma Phase Offset";
+    ui_category = "Composite Video";
+    ui_tooltip = "Horizontal offset of the chroma channels relative to luma.\n"
+                 "On real composite video the colour signal could arrive slightly\n"
+                 "delayed, causing a visible colour fringe offset from the edges.\n"
+                 "0.0 = no offset (default). Positive = colour shifts right.";
+    ui_min = -3.0; ui_max = 3.0; ui_step = 0.1;
+> = 0.0;
+
+uniform float crt_composite_luma_sharpen <
+    ui_type = "drag"; ui_label = "Luma Sharpness Boost";
+    ui_category = "Composite Video";
+    ui_tooltip = "Compensates for the overall signal softness by boosting luma\n"
+                 "edge contrast. Combined with chroma blur gives the authentic\n"
+                 "composite look: crisp edges with colour bleed.\n"
                  "0.0 = disabled. 0.1-0.3 = subtle. 0.5+ = strong.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.0;
-
-uniform float crt_edge_feedback_chroma <
-    ui_type = "drag"; ui_label = "Chroma Diffusion";
-    ui_category = "Edge Feedback";
-    ui_tooltip = "Softens colour channels horizontally using the previous frame as\n"
-                 "reference. Creates a subtle chroma diffusion on moving content.\n"
-                 "Most effective with ENABLE_GEOMETRY=1.\n"
-                 "0.0 = disabled. 0.3-0.6 = subtle. 1.0 = strong diffusion.";
-    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
-> = 0.0;
-#endif // ENABLE_EDGE_FEEDBACK
+#endif // ENABLE_COMPOSITE
 
 // ============================================================
 // Uniforms -- Post-Scanline Softening
@@ -518,6 +547,17 @@ uniform float3 crt_phosphor_colour <
     ui_category = "Mask";
     ui_tooltip = "(1,1,1)=neutral, (1.02,1,0.97)=P22 warm.";
 > = float3(1.0, 1.0, 1.0);
+
+uniform float crt_phosphor_dot <
+    ui_type = "drag"; ui_label = "Phosphor Dot Structure";
+    ui_category = "Mask";
+    ui_tooltip = "Subtle procedural luminance variation between individual phosphor\n"
+                 "dots/stripes, simulating manufacturing imperfections in the\n"
+                 "phosphor coating. Almost invisible individually but adds texture\n"
+                 "and organic feel at high magnification.\n"
+                 "0.0 = disabled (default). 0.02-0.05 = authentic subtle texture.";
+    ui_min = 0.0; ui_max = 0.15; ui_step = 0.005;
+> = 0.0;
 
 uniform int crt_mask_type <
     ui_type = "combo"; ui_label = "Mask Type";
@@ -914,6 +954,17 @@ uniform float crt_pin_phase <
                  "vertical scan position. Based on Sony Megatron.\n"
                  "Models CRT deflection yoke geometry where horizontal linearity\n"
                  "changes with vertical deflection angle.\n"
+                 "Positive = pincushion. Negative = barrel.\n"
+                 "0.0 = disabled (default). 0.02-0.05 = subtle. 0.1+ = strong.";
+    ui_min = -0.2; ui_max = 0.2; ui_step = 0.005;
+> = 0.0;
+
+uniform float crt_pin_amp <
+    ui_type = "drag"; ui_label = "Pin Amp";
+    ui_category = "Light Warp";
+    ui_tooltip = "Vertical scan linearity error -- vertical position of each column\n"
+                 "varies with its horizontal position. Vertical complement to Pin Phase.\n"
+                 "Combined with Pin Phase gives full pincushion/barrel raster geometry.\n"
                  "Positive = pincushion. Negative = barrel.\n"
                  "0.0 = disabled (default). 0.02-0.05 = subtle. 0.1+ = strong.";
     ui_min = -0.2; ui_max = 0.2; ui_step = 0.005;
@@ -1343,6 +1394,16 @@ uniform float crt_corner_intensity <
                  "0.25 = very soft. 1.0 = linear. 2.0 = sharp (default).";
     ui_min = 0.25; ui_max = 4.0; ui_step = 0.05;
 > = 2.0;
+
+uniform float crt_corner_shadow <
+    ui_type = "drag"; ui_label = "Corner Shadow";
+    ui_category = "Corner Rounding";
+    ui_tooltip = "Darkening at the extreme corners of the screen, simulating\n"
+                 "the shadow cast by the CRT bezel pressing against the tube.\n"
+                 "Independent of corner rounding -- works at any geometry setting.\n"
+                 "0.0 = disabled. 0.2-0.5 = subtle darkening. 1.0 = strong shadow.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
 #endif
 
 // ============================================================
@@ -1378,6 +1439,98 @@ uniform float crt_edge_blur_radius <
 > = 3.0;
 
 #endif // ENABLE_EDGE_BLUR
+
+// ============================================================
+// Uniforms -- Screen Reflection
+// ============================================================
+
+#if ENABLE_SCREEN_REFLECT
+uniform float crt_reflect_strength <
+    ui_type = "drag"; ui_label = "Reflection Strength";
+    ui_category = "Screen Reflection";
+    ui_tooltip = "Faint blurred self-reflection simulating light bouncing between\n"
+                 "the thick CRT glass and the phosphor tube.\n"
+                 "A blurred copy of the image composited additively at screen edges,\n"
+                 "fading toward the centre. Most visible on dark backgrounds with\n"
+                 "bright content near the edges. Based on Mega Bezel concept (GPLv3).\n"
+                 "0.0 = disabled. 0.02-0.05 = subtle. 0.1+ = visible.";
+    ui_min = 0.0; ui_max = 0.3; ui_step = 0.005;
+> = 0.0;
+
+uniform float crt_reflect_gamma <
+    ui_type = "drag"; ui_label = "Reflection Gamma";
+    ui_category = "Screen Reflection";
+    ui_tooltip = "Gamma applied to the reflection before compositing.\n"
+                 "Higher = reflection concentrated on brighter content.\n"
+                 "Lower = more uniform reflection across all tones.";
+    ui_min = 0.5; ui_max = 4.0; ui_step = 0.05;
+> = 2.0;
+
+uniform float crt_reflect_fade <
+    ui_type = "drag"; ui_label = "Edge Fade";
+    ui_category = "Screen Reflection";
+    ui_tooltip = "How quickly the reflection fades toward the screen centre.\n"
+                 "Higher = reflection concentrated at extreme edges.\n"
+                 "Lower = reflection extends further inward.";
+    ui_min = 0.5; ui_max = 8.0; ui_step = 0.1;
+> = 3.0;
+#endif // ENABLE_SCREEN_REFLECT
+
+// ============================================================
+// Uniforms -- Tube Diffuse
+// ============================================================
+
+#if ENABLE_TUBE_DIFFUSE
+uniform float crt_tube_diffuse_strength <
+    ui_type = "drag"; ui_label = "Tube Diffuse Strength";
+    ui_category = "Tube Diffuse";
+    ui_tooltip = "Ambient glow from phosphors scattering through the CRT glass.\n"
+                 "A heavily blurred copy of the final image composited additively.\n"
+                 "Creates faint warmth proportional to scene brightness.\n"
+                 "Different from halation (which halos bright elements).\n"
+                 "Based on Mega Bezel fullscreen glow concept (GPLv3).\n"
+                 "0.0 = disabled. 0.02-0.06 = subtle ambient warmth. 0.15+ = strong.";
+    ui_min = 0.0; ui_max = 0.3; ui_step = 0.005;
+> = 0.0;
+
+uniform float crt_tube_diffuse_gamma <
+    ui_type = "drag"; ui_label = "Tube Diffuse Gamma";
+    ui_category = "Tube Diffuse";
+    ui_tooltip = "Gamma applied to the diffuse glow before compositing.\n"
+                 "Higher = effect concentrated on brighter content.\n"
+                 "Lower = more uniform ambient lift across all tones.";
+    ui_min = 0.5; ui_max = 4.0; ui_step = 0.05;
+> = 2.0;
+#endif // ENABLE_TUBE_DIFFUSE
+
+// ============================================================
+// Uniforms -- Edge Feedback
+// ============================================================
+
+#if ENABLE_EDGE_FEEDBACK
+uniform float crt_edge_feedback_luma <
+    ui_type = "drag"; ui_label = "Edge Feedback Strength";
+    ui_category = "Edge Feedback";
+    ui_tooltip = "Amplifies CRT edge and peripheral effects by comparing the current\n"
+                 "pixel against its neighbours from the previous rendered frame.\n"
+                 "The difference captures accumulated CRT processing (mask transitions,\n"
+                 "scanline gaps, vignette gradient) and feeds it back as edge enhancement.\n"
+                 "Effect is strongest at screen edges and geometry-warped areas.\n"
+                 "Most effective with ENABLE_GEOMETRY=1.\n"
+                 "0.0 = disabled. 0.1-0.3 = subtle. 0.5+ = strong.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_edge_feedback_chroma <
+    ui_type = "drag"; ui_label = "Chroma Diffusion";
+    ui_category = "Edge Feedback";
+    ui_tooltip = "Softens colour channels horizontally using the previous frame as\n"
+                 "reference. Creates a subtle chroma diffusion on moving content.\n"
+                 "Most effective with ENABLE_GEOMETRY=1.\n"
+                 "0.0 = disabled. 0.3-0.6 = subtle. 1.0 = strong diffusion.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+#endif // ENABLE_EDGE_FEEDBACK
 
 // ============================================================
 #if ENABLE_GRAIN
@@ -1454,6 +1607,33 @@ uniform float crt_noise_floor_scale <
 // ============================================================
 
 #if ENABLE_DECAY
+
+uniform float crt_phosphor_trail_r <
+    ui_type = "drag"; ui_label = "Phosphor Trail Red Tint";
+    ui_category = "Phosphor Decay";
+    ui_tooltip = "Colour tint on the red channel of the persistence trail.\n"
+                 "Real phosphors shift hue as they decay -- P22 red drifts\n"
+                 "slightly orange. 0.0 = no tint (default).";
+    ui_min = -0.5; ui_max = 0.5; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_phosphor_trail_g <
+    ui_type = "drag"; ui_label = "Phosphor Trail Green Tint";
+    ui_category = "Phosphor Decay";
+    ui_tooltip = "Colour tint on the green channel of the persistence trail.\n"
+                 "P22 green shifts slightly yellow-green as it decays.\n"
+                 "0.0 = no tint (default).";
+    ui_min = -0.5; ui_max = 0.5; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_phosphor_trail_b <
+    ui_type = "drag"; ui_label = "Phosphor Trail Blue Tint";
+    ui_category = "Phosphor Decay";
+    ui_tooltip = "Colour tint on the blue channel of the persistence trail.\n"
+                 "Blue phosphors shift toward cyan as they cool.\n"
+                 "0.0 = no tint (default).";
+    ui_min = -0.5; ui_max = 0.5; ui_step = 0.01;
+> = 0.0;
 
 // -- Shared --------------------------------------------------
 uniform int crt_decay_method <
@@ -1795,6 +1975,27 @@ uniform float crt_hum_speed <
     ui_min = 1.0; ui_max = 200.0; ui_step = 1.0;
 > = 50.0;
 
+uniform float crt_hsync_strength <
+    ui_type = "drag"; ui_label = "H-Sync Instability";
+    ui_category = "Interference";
+    ui_tooltip = "Occasional brief horizontal displacement of individual scanlines,\n"
+                 "simulating a weak H-sync signal losing lock momentarily.\n"
+                 "Unlike wiggle (continuous whole-frame oscillation), this fires\n"
+                 "probabilistically on random rows -- rare, sharp, localised.\n"
+                 "Slightly stronger near top of screen (authentic sync behaviour).\n"
+                 "Resolution-scaled: same value = same pixel displacement at any res.\n"
+                 "0.0 = disabled. 0.002-0.005 = rare subtle glitch. 0.01+ = frequent.";
+    ui_min = 0.0; ui_max = 0.03; ui_step = 0.001;
+> = 0.0;
+
+uniform float crt_hsync_rate <
+    ui_type = "drag"; ui_label = "H-Sync Glitch Rate";
+    ui_category = "Interference";
+    ui_tooltip = "How frequently H-sync glitches occur. Higher = more rows affected\n"
+                 "per frame. 0.01 = very rare (1% of rows). 0.1 = frequent (10%).";
+    ui_min = 0.005; ui_max = 0.2; ui_step = 0.005;
+> = 0.02;
+
 uniform float crt_wiggle_strength <
     ui_type = "drag"; ui_label = "Wiggle Strength";
     ui_category = "Interference";
@@ -1812,6 +2013,16 @@ uniform float crt_wiggle_speed <
     ui_tooltip = "How fast the interference pattern evolves over time.";
     ui_min = 0.0; ui_max = 4.0; ui_step = 0.1;
 > = 1.0;
+
+uniform float crt_scanline_jitter <
+    ui_type = "drag"; ui_label = "Scanline Jitter";
+    ui_category = "Interference";
+    ui_tooltip = "Per-scanline vertical displacement in pixels.\n"
+                 "Simulates raster instability -- each row offset by a small\n"
+                 "random amount that drifts slowly over time.\n"
+                 "0.0 = disabled. 0.3-0.8 = subtle. 1.0-2.0 = noticeable.";
+    ui_min = 0.0; ui_max = 3.0; ui_step = 0.05;
+> = 0.0;
 
 uniform float crt_flicker_strength <
     ui_type = "drag"; ui_label = "Rolling Scanlines Strength";
@@ -1832,6 +2043,59 @@ uniform float crt_accum_modulate <
                  "0.0 = disabled. 0.5-0.7 = subtle trail. 0.9+ = heavy ghosting.\n"
                  "Implemented as a dedicated accumulation pass.";
     ui_min = 0.0; ui_max = 0.95; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_magnetic_strength <
+    ui_type = "drag"; ui_label = "Magnetic Interference Strength";
+    ui_category = "Interference";
+    ui_tooltip = "Persistent magnetic field interference -- radial hue rotation\n"
+                 "around a focal point, creating characteristic rainbow rings.\n"
+                 "Simulates a magnet or speaker placed near the CRT.\n"
+                 "0.0 = disabled. 0.1-0.3 = subtle. 0.5+ = strong colour shift.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
+
+uniform float crt_magnetic_x <
+    ui_type = "drag"; ui_label = "Magnetic Source X";
+    ui_category = "Interference";
+    ui_tooltip = "Horizontal position of the magnetic interference source.\n"
+                 "0.0 = left edge. 0.5 = centre. 1.0 = right edge.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.25;
+
+uniform float crt_magnetic_y <
+    ui_type = "drag"; ui_label = "Magnetic Source Y";
+    ui_category = "Interference";
+    ui_tooltip = "Vertical position of the magnetic interference source.\n"
+                 "0.0 = top. 0.5 = centre. 1.0 = bottom.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.25;
+
+uniform float crt_magnetic_radius <
+    ui_type = "drag"; ui_label = "Magnetic Radius";
+    ui_category = "Interference";
+    ui_tooltip = "Radius of the interference rings. Larger = wider rings,\n"
+                 "effect extends further from the source.";
+    ui_min = 0.1; ui_max = 2.0; ui_step = 0.05;
+> = 0.5;
+
+uniform float crt_magnetic_speed <
+    ui_type = "drag"; ui_label = "Magnetic Animation Speed";
+    ui_category = "Interference";
+    ui_tooltip = "Speed of the ring animation -- rings slowly pulse outward.\n"
+                 "0.0 = static. 1.0 = slow drift. 3.0+ = fast pulsing.";
+    ui_min = 0.0; ui_max = 5.0; ui_step = 0.1;
+> = 1.0;
+
+uniform float crt_dot_crawl <
+    ui_type = "drag"; ui_label = "Dot Crawl";
+    ui_category = "Interference";
+    ui_tooltip = "NTSC composite colour subcarrier interference pattern.\n"
+                 "Creates a moving diagonal noise at luma-chroma boundaries,\n"
+                 "characteristic of 240p content through composite video.\n"
+                 "Most visible on coloured edges against contrasting backgrounds.\n"
+                 "0.0 = disabled. 0.02-0.05 = subtle. 0.1+ = strong.";
+    ui_min = 0.0; ui_max = 0.2; ui_step = 0.005;
 > = 0.0;
 
 uniform float crt_ghost_strength <
@@ -2386,6 +2650,21 @@ static const float3x3 kXYZ_to_sRGB = float3x3(
     -0.969244, 1.875968, 0.041555,
      0.055630,-0.203977, 1.056972);
 #endif
+
+// ============================================================
+// Hue rotation helper (for magnetic interference)
+// ============================================================
+float3 hue_rotate(float3 c, float angle)
+{
+    // Rotate hue by angle (radians) using RGB rotation matrix
+    float s = sin(angle);
+    float cs = cos(angle);
+    float3x3 m = float3x3(
+        cs + (1.0-cs)/3.0,        (1.0-cs)/3.0 - s*0.57735, (1.0-cs)/3.0 + s*0.57735,
+        (1.0-cs)/3.0 + s*0.57735, cs + (1.0-cs)/3.0,         (1.0-cs)/3.0 - s*0.57735,
+        (1.0-cs)/3.0 - s*0.57735, (1.0-cs)/3.0 + s*0.57735,  cs + (1.0-cs)/3.0);
+    return max(mul(c, m), 0.0);
+}
 
 // ============================================================
 // Megatron BCS in Yxy space
@@ -3403,6 +3682,59 @@ void crt_main_PS(
         tex2D(ReShade::BackBuffer, uv_b).b);
     #endif
 
+    // -- Composite video: chroma blur + luma sharpen on correct source --
+    // Runs after source sampling so it operates on the actual current frame
+    // with correct UV mapping (preblur/geometry/plain as appropriate).
+    #if ENABLE_COMPOSITE
+    if (crt_composite_chroma_blur > 0.001 || crt_composite_luma_sharpen > 0.001)
+    {
+        float luma = dot(c, float3(0.299, 0.587, 0.114));
+        float px_c = ReShade::PixelSize.x;
+
+        if (crt_composite_chroma_blur > 0.001)
+        {
+            int    taps      = int(ceil(crt_composite_chroma_blur * 2.0));
+            float3 chroma_sum = 0.0;
+            for (int ci = -taps; ci <= taps; ci++)
+            {
+                float  offs = (float(ci) + crt_composite_chroma_phase) * px_c;
+                #if ENABLE_PREBLUR
+                chroma_sum += float3(
+                    tex2D(crt_preblur_v_sampler, uv_r + float2(offs, 0.0)).r,
+                    tex2D(crt_preblur_v_sampler, uv_g + float2(offs, 0.0)).g,
+                    tex2D(crt_preblur_v_sampler, uv_b + float2(offs, 0.0)).b);
+                #else
+                chroma_sum += float3(
+                    tex2D(ReShade::BackBuffer, uv_r + float2(offs, 0.0)).r,
+                    tex2D(ReShade::BackBuffer, uv_g + float2(offs, 0.0)).g,
+                    tex2D(ReShade::BackBuffer, uv_b + float2(offs, 0.0)).b);
+                #endif
+            }
+            float3 c_blurred    = chroma_sum / float(2*taps + 1);
+            float  luma_blurred = dot(c_blurred, float3(0.299, 0.587, 0.114));
+            float  luma_ratio   = (luma_blurred > 0.0001) ? luma / luma_blurred : 1.0;
+            c = c_blurred * luma_ratio;
+        }
+
+        if (crt_composite_luma_sharpen > 0.001)
+        {
+            #if ENABLE_PREBLUR
+            float3 left  = tex2D(crt_preblur_v_sampler, uv_g - float2(px_c * 2.0, 0.0));
+            float3 right = tex2D(crt_preblur_v_sampler, uv_g + float2(px_c * 2.0, 0.0));
+            #else
+            float3 left  = tex2D(ReShade::BackBuffer, uv_g - float2(px_c * 2.0, 0.0));
+            float3 right = tex2D(ReShade::BackBuffer, uv_g + float2(px_c * 2.0, 0.0));
+            #endif
+            float luma_l    = dot(left,  float3(0.299, 0.587, 0.114));
+            float luma_r    = dot(right, float3(0.299, 0.587, 0.114));
+            float edge      = luma - 0.5*(luma_l + luma_r);
+            float luma_sharp = max(luma + edge * crt_composite_luma_sharpen, 0.0001);
+            c *= luma_sharp / max(luma, 0.0001);
+            c  = max(c, 0.0);
+        }
+    }
+    #endif // ENABLE_COMPOSITE
+
     // -- Phosphor profile correction (before BCS) --
     #if ENABLE_PHOSPHOR
     if (crt_phosphor_strength > 0.001)
@@ -3496,6 +3828,14 @@ void crt_main_PS(
                                     crt_mask_type, crt_slot_mask_strength,
                                     crt_mask_offset_x, crt_mask_offset_y, fc,
                                     mask_pixel_luma);
+        // Phosphor dot structure: subtle per-dot luminance variation
+        if (crt_phosphor_dot > 0.001)
+        {
+            uint dot_seed = uint(fc_mask.x) * 2333u + uint(fc_mask.y) * 3571u;
+            float dot_var = grain_unorm1(grain_uhash(dot_seed)) * 2.0 - 1.0;
+            mask *= 1.0 + dot_var * crt_phosphor_dot;
+            mask  = max(mask, 0.0);
+        }
         c_lin = c_lin * mask * crt_mask_boost;
     #endif
 
@@ -3690,6 +4030,16 @@ void crt_main_PS(
     }
     #endif // ENABLE_VIGNETTE
 
+    // -- Corner shadow: bezel-cast darkening at screen extremes --
+    #if ENABLE_CORNER_ROUND
+    if (crt_corner_shadow > 0.001)
+    {
+        float2 edge  = abs(texcoord - 0.5) * 2.0; // 0=centre, 1=edge
+        float  shadow = pow(max(edge.x, edge.y), 6.0);
+        c *= 1.0 - shadow * crt_corner_shadow;
+    }
+    #endif
+
     // -- Halation (bright element glass scatter, localised) --
     #if ENABLE_HALATION
     if (crt_halation_strength > 0.001)
@@ -3707,7 +4057,6 @@ void crt_main_PS(
         c += halo * gate * crt_halation_strength;
     }
     #endif
-
 
     // -- Interference: rolling scanlines and animated chromatic ghosting --
 
@@ -4528,7 +4877,14 @@ void crt_decay_PS(
             float luma_mix = pow(saturate(luma), max(1.0 - crt_decay_luma_protect, 0.001));
             factor         = lerp(factor, float3(1.0, 1.0, 1.0), luma_mix * crt_decay_luma_protect);
 
-            out_color = c * factor;
+            // Phosphor trail colour cast: tint the decayed trail component
+            // trail = c*factor - c*1.0 (the "missing" brightness from decay)
+            // Shift trail colour by adding a per-channel tint proportional to (1-factor)
+            float3 trail_tint = float3(
+                1.0 + crt_phosphor_trail_r * (1.0 - factor.r),
+                1.0 + crt_phosphor_trail_g * (1.0 - factor.g),
+                1.0 + crt_phosphor_trail_b * (1.0 - factor.b));
+            out_color = c * factor * trail_tint;
         }
     }
     else if (crt_decay_method == 2)
@@ -4728,6 +5084,115 @@ void crt_decay_PS(
 // ============================================================
 
 // ============================================================
+// Composite video pass -- Y/C separation with independent luma/chroma bandwidth
+// ============================================================
+#if ENABLE_COMPOSITE
+void crt_composite_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
+    float px = ReShade::PixelSize.x;
+
+    // Extract luma
+    float luma = dot(c, float3(0.299, 0.587, 0.114));
+
+    // Chroma blur: box blur colour channels horizontally
+    if (crt_composite_chroma_blur > 0.001)
+    {
+        // Box blur colour channels with width proportional to chroma_blur.
+        // No triangle weighting -- flat box gives stronger, more visible bleed.
+        int   taps       = int(ceil(crt_composite_chroma_blur * 2.0));
+        float3 chroma_sum = 0.0;
+        for (int i = -taps; i <= taps; i++)
+        {
+            float2 uv = texcoord + float2((float(i) + crt_composite_chroma_phase) * px, 0.0);
+            chroma_sum += tex2D(ReShade::BackBuffer, uv).rgb;
+        }
+        float3 c_blurred = chroma_sum / float(2*taps + 1);
+
+        // Correct luma-preserving recombine:
+        // Scale blurred RGB so its luma matches original luma exactly.
+        float luma_blurred = dot(c_blurred, float3(0.299, 0.587, 0.114));
+        float luma_ratio   = (luma_blurred > 0.0001) ? luma / luma_blurred : 1.0;
+        c = c_blurred * luma_ratio;
+    }
+
+    // Luma sharpness boost: unsharp mask on luma channel, sampled from c (post-blur)
+    if (crt_composite_luma_sharpen > 0.001)
+    {
+        float3 left  = tex2D(ReShade::BackBuffer, texcoord - float2(px * 2.0, 0.0)).rgb;
+        float3 right = tex2D(ReShade::BackBuffer, texcoord + float2(px * 2.0, 0.0)).rgb;
+        float luma_l = dot(left,  float3(0.299, 0.587, 0.114));
+        float luma_r = dot(right, float3(0.299, 0.587, 0.114));
+        // Apply sharpening as a luminance scale to preserve hue
+        float edge      = luma - 0.5*(luma_l + luma_r);
+        float luma_sharp = max(luma + edge * crt_composite_luma_sharpen, 0.0001);
+        c *= luma_sharp / max(luma, 0.0001);
+        c  = max(c, 0.0);
+    }
+
+    color = float4(c, 1.0);
+}
+#endif // ENABLE_COMPOSITE
+
+// ============================================================
+// Screen reflection pass -- faint blurred self-reflection at screen edges
+// Simulates thick CRT glass internal reflection: bright content near edges
+// bounces back faintly, fading toward screen centre.
+// ============================================================
+#if ENABLE_SCREEN_REFLECT
+void crt_screen_reflect_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
+    if (crt_reflect_strength > 0.001)
+    {
+        // Edge mask: distance from screen centre, stronger at edges.
+        // Uses distance from 0.5 in each axis, raised to power for falloff shape.
+        float2 edge_dist = abs(texcoord - 0.5) * 2.0; // 0 at centre, 1 at edge
+        float  edge_mask = pow(max(edge_dist.x, edge_dist.y), crt_reflect_fade);
+        edge_mask = saturate(edge_mask);
+
+        // Sample from wide glow texture as reflection source -- already blurred.
+        // Gamma compresses to concentrate on bright content.
+        float3 reflect_src = tex2D(crt_glow_wide_v_sampler, texcoord).rgb;
+        reflect_src = pow(max(reflect_src, 0.0), crt_reflect_gamma);
+
+        // Additive composite gated to screen edges
+        c += reflect_src * crt_reflect_strength * edge_mask;
+    }
+    color = float4(c, 1.0);
+}
+#endif // ENABLE_SCREEN_REFLECT
+
+// ============================================================
+// Tube diffuse pass -- ambient phosphor scatter glow through CRT glass
+// ============================================================
+#if ENABLE_TUBE_DIFFUSE
+void crt_tube_diffuse_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
+    if (crt_tube_diffuse_strength > 0.001)
+    {
+        // Sample from the wide glow texture -- already heavily blurred.
+        // Apply gamma to concentrate the effect on brighter content,
+        // then composite additively at low strength.
+        float3 diffuse = tex2D(crt_glow_wide_v_sampler, texcoord).rgb;
+        diffuse = pow(max(diffuse, 0.0), crt_tube_diffuse_gamma);
+        c += diffuse * crt_tube_diffuse_strength;
+    }
+    color = float4(c, 1.0);
+}
+#endif // ENABLE_TUBE_DIFFUSE
+
+// ============================================================
 // Noise floor pass -- fixed-pattern thermal noise, independent of interference
 // ============================================================
 #if ENABLE_NOISE_FLOOR
@@ -4789,6 +5254,31 @@ void crt_interference_PS(
 
     float3 c = color.rgb;
 
+    // -- H-sync instability: probabilistic per-row horizontal displacement --
+    // Fires on random rows with probability crt_hsync_rate per row per frame.
+    // Displacement magnitude varies per row. Stronger near top of screen.
+    if (crt_hsync_strength > 0.001)
+    {
+        uint row       = uint(texcoord.y * float(BUFFER_HEIGHT));
+        // Fast per-row per-frame hash -- changes every frame for probabilistic firing
+        uint hsync_seed = row * 3761u + FRAMECOUNT * 0x45D9F3Bu;
+        float rand_val  = grain_unorm1(grain_uhash(hsync_seed));
+        // Fire if random value below rate threshold
+        if (rand_val < crt_hsync_rate)
+        {
+            // Displacement amount: second hash for magnitude + sign
+            uint  mag_seed  = row * 9277u + FRAMECOUNT * 0x1B873593u;
+            float disp      = (grain_unorm1(grain_uhash(mag_seed)) - 0.5) * 2.0;
+            // Slightly stronger near top (sync lock weaker at frame start)
+            float top_bias  = 1.0 + (1.0 - texcoord.y) * 0.5;
+            // Resolution-scaled
+            float hs_scale  = 1080.0 / float(BUFFER_WIDTH);
+            float2 hs_uv    = float2(texcoord.x + disp * crt_hsync_strength * top_bias * hs_scale,
+                                     texcoord.y);
+            c = tex2D(ReShade::BackBuffer, hs_uv).rgb;
+        }
+    }
+
     // -- Wiggle: horizontal UV displacement (NewPixie triple-sine) --
     // Post-process UV warp on the already-rendered image.
     if (crt_wiggle_strength > 0.0001)
@@ -4803,6 +5293,49 @@ void crt_interference_PS(
         c = tex2D(ReShade::BackBuffer, warp_uv).rgb;
     }
 
+    // -- Magnetic interference: radial hue rotation around source point --
+    if (crt_magnetic_strength > 0.001)
+    {
+        // Distance from magnetic source, aspect-corrected
+        float ar = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
+        float2 src = float2(crt_magnetic_x, crt_magnetic_y);
+        float2 delta = (texcoord - src) * float2(ar, 1.0);
+        float dist = length(delta);
+
+        // Animated ring phase: slow outward drift
+        float t_mag = CRT_TIMER * 0.001 * crt_magnetic_speed;
+        // Ring pattern: sin of distance creates concentric rings,
+        // phase offset by time makes them drift outward
+        float ring_phase = dist / max(crt_magnetic_radius, 0.001) * 6.2832 - t_mag;
+        float ring = sin(ring_phase);
+
+        // Hue rotation amount: stronger near source, modulated by ring pattern
+        float dist_gate = exp(-dist / max(crt_magnetic_radius, 0.001));
+        float angle = ring * dist_gate * crt_magnetic_strength * 3.14159;
+
+        c = hue_rotate(c, angle);
+    }
+
+    // -- Dot crawl: NTSC colour subcarrier interference at luma-chroma boundaries --
+    // Animated diagonal pattern at colour edges, characteristic of composite video.
+    if (crt_dot_crawl > 0.001)
+    {
+        // Phase advances ~3.58 cycles per frame (NTSC subcarrier relationship)
+        float phase = float(FRAMECOUNT) * 0.279; // ~pi/2 * 3.58/4 approximation
+        float2 fc_pos = texcoord * float2(BUFFER_WIDTH, BUFFER_HEIGHT);
+        // Chequered subcarrier pattern: alternates sign with pixel position and time
+        float subcarrier = sin(phase + (floor(fc_pos.x) + floor(fc_pos.y)) * 3.14159);
+        // Gate to colour edges only -- measure local colour variation
+        float2 px = ReShade::PixelSize;
+        float3 left  = tex2D(ReShade::BackBuffer, texcoord - float2(px.x, 0)).rgb;
+        float3 right = tex2D(ReShade::BackBuffer, texcoord + float2(px.x, 0)).rgb;
+        float chroma_edge = length((left - right) - dot(left - right, float3(0.299,0.587,0.114)));
+        float gate = saturate(chroma_edge * 8.0);
+        // Add the subcarrier pattern modulated by the colour edge strength
+        c += subcarrier * crt_dot_crawl * gate;
+        c = max(c, 0.0);
+    }
+
     // -- Hum bars: AC mains interference scrolling brightness gradient --
     if (abs(crt_hum_intensity) > 0.001)
     {
@@ -4811,6 +5344,18 @@ void crt_interference_PS(
             ? (1.0 - crt_hum_intensity) + crt_hum_intensity * hum_scroll
             : (1.0 + crt_hum_intensity) + crt_hum_intensity * (hum_scroll - 1.0);
         c *= hum_mult;
+    }
+
+    // -- Scanline jitter: per-scanline vertical displacement --
+    if (crt_scanline_jitter > 0.001)
+    {
+        uint row      = uint(texcoord.y * float(BUFFER_HEIGHT));
+        uint t_slow   = (FRAMECOUNT / 3u) * 0x9E3779B9u;
+        uint jit_seed = row * 1447u + t_slow;
+        float jitter  = (grain_unorm1(grain_uhash(jit_seed)) - 0.5) * 2.0;
+        // Slider is in pixel units -- convert to UV
+        float2 jit_uv = float2(texcoord.x, texcoord.y + jitter * crt_scanline_jitter * ReShade::PixelSize.y);
+        c = tex2D(ReShade::BackBuffer, jit_uv).rgb;
     }
 
     // -- Rolling scanlines: sync instability at screen-resolution frequency --
@@ -4875,7 +5420,7 @@ void crt_light_warp_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    if (abs(crt_warp_strength) < 0.001 && abs(crt_pin_phase) < 0.001)
+    if (abs(crt_warp_strength) < 0.001 && abs(crt_pin_phase) < 0.001 && abs(crt_pin_amp) < 0.001)
     {
         color = tex2D(ReShade::BackBuffer, texcoord);
         return;
@@ -4888,10 +5433,10 @@ void crt_light_warp_PS(
     float  r2  = dot(uv, uv);
     uv        *= 1.0 + crt_warp_strength * r2;
 
-    // Pin phase: horizontal linearity varies with vertical position.
-    // Models CRT deflection yoke geometry (Sony Megatron approach).
-    // tex_coord.x *= 1 + pin_phase * tex_coord.y
+    // Pin phase: horizontal linearity varies with vertical position (Megatron).
     uv.x      *= 1.0 + crt_pin_phase * (uv.y / max(0.5 * ar, 0.001));
+    // Pin amp: vertical linearity varies with horizontal position (complement).
+    uv.y      *= 1.0 + crt_pin_amp   * (uv.x / max(0.5, 0.001));
 
     uv.x      /= ar;
     uv        += 0.5;
@@ -5153,6 +5698,20 @@ technique CRT_Standalone <
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_soop_after_PS;
+    }
+    #endif
+    #if ENABLE_SCREEN_REFLECT
+    pass ScreenReflect
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_screen_reflect_PS;
+    }
+    #endif
+    #if ENABLE_TUBE_DIFFUSE
+    pass TubeDiffuse
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_tube_diffuse_PS;
     }
     #endif
     #if ENABLE_INTERFERENCE

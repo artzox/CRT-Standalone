@@ -8,6 +8,50 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.0] — 2025-05
+
+### New Feature Gates
+
+#### Composite Video (`ENABLE_COMPOSITE=1`)
+Luma/chroma separation integrated directly into the main CRT pass after source sampling, using the correct texture per path (preblur sampler or backbuffer). Flat box blur on colour channels for authentic composite colour bleed. Luma-preserving recombine via multiplicative rescale. Three controls: Chroma Blur Width, Chroma Phase Offset, Luma Sharpness Boost.
+
+#### Tube Diffuse (`ENABLE_TUBE_DIFFUSE=1`)
+Ambient phosphor scatter glow through CRT glass. Samples `crt_glow_wide_v_sampler` and composites additively at low opacity, creating faint warmth proportional to scene brightness. Independent of halation. Based on Mega Bezel fullscreen glow concept (GPLv3). Post-process pass after SoopAfter.
+
+#### Screen Reflection (`ENABLE_SCREEN_REFLECT=1`)
+Faint blurred self-reflection at screen edges, fading toward centre via `pow(max(edge_x, edge_y), fade)` mask. Samples `crt_glow_wide_v_sampler` with gamma control. Most visible on dark backgrounds with bright content near edges. Post-process pass after tube diffuse.
+
+### New Controls (no gate required)
+
+**Phosphor Dot Structure** (Mask) — per-dot luminance variation via `grain_uhash` keyed to mask-space pixel coordinates. Stable relative to the mask pattern. Range 0–0.15.
+
+**Corner Shadow** (Corner Rounding, requires `ENABLE_CORNER_ROUND=1`) — sharp `pow(max(edge_x, edge_y), 6)` darkening at screen corners simulating bezel shadow.
+
+**Pin Amp** (Light Warp, requires `ENABLE_LIGHT_WARP=1`) — vertical complement to Pin Phase: `uv.y *= 1 + crt_pin_amp * (uv.x / 0.5)`. Completes full pincushion/barrel geometry model.
+
+**Phosphor Trail R/G/B Tint** (Phosphor Decay, requires `ENABLE_DECAY=1`) — per-channel colour cast on the decayed trail component: `trail_tint = 1 + tint * (1 - factor)`.
+
+**White Point** (Phosphor Profile, requires `ENABLE_PHOSPHOR=1`) — chromatic adaptation from D65 toward D55 (warm) or D93 (cool) using Guest Advanced matrices.
+
+### New Interference Effects (requires `ENABLE_INTERFERENCE=1`)
+
+**H-Sync Instability** — probabilistic per-row horizontal displacement. Two hashes per row per frame: one for fire/no-fire decision against `crt_hsync_rate`, one for displacement magnitude. Top-of-screen bias (`1 + (1-y)*0.5`). Resolution-scaled via `1080/BUFFER_WIDTH`.
+
+**Scanline Jitter** — per-row vertical displacement using slow hash (`FRAMECOUNT/3`). Slider in pixel units, converted to UV via `* ReShade::PixelSize.y`.
+
+**Dot Crawl** — NTSC subcarrier interference pattern. Phase advances `FRAMECOUNT * 0.279`. Chequered `sin(phase + (x+y)*π)` pattern gated to colour edges via local chroma gradient detection.
+
+**Magnetic Interference** — radial hue rotation around user-positioned source. Concentric ring pattern: `sin(dist/radius*2π - time) * exp(-dist/radius)`. Five controls: Strength, Source X/Y, Radius, Animation Speed.
+
+### Bug Fixes
+
+- Composite pass was sampling from previous frame backbuffer — moved into main CRT pass to operate on correct current-frame source
+- Scanline jitter was inserted into main CRT pass instead of interference PS — moved to correct location
+- Corner shadow uniform was outside `ENABLE_CORNER_ROUND` gate — code and uniform now consistently gated
+- `crt_pin_amp` and `crt_dot_crawl` uniforms were outside their respective feature gates — both moved inside
+
+---
+
 ## [1.0.2] — 2025-05
 
 ### New Features

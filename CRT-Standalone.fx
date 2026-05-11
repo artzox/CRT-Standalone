@@ -3633,7 +3633,8 @@ void crt_main_PS(
         tex2D(crt_preblur_v_sampler, uv_g).g,
         tex2D(crt_preblur_v_sampler, uv_b).b);
 
-    // -- Vertical per-channel spread (ENABLE_PREBLUR path) --
+    // -- Vertical per-channel spread (ENABLE_PREBLUR + ENABLE_CONVERGENCE path) --
+    #if ENABLE_CONVERGENCE
     if (crt_convergence_v_spread > 0.001)
     {
         float py = ReShade::PixelSize.y * crt_convergence_v_spread;
@@ -3644,6 +3645,7 @@ void crt_main_PS(
         c.r = (c.r + r_above + r_below) / 3.0;
         c.b = (c.b + b_above + b_below) / 3.0;
     }
+    #endif // ENABLE_CONVERGENCE
     #elif ENABLE_GEOMETRY
     {
         // Geometry: one Lanczos reconstruction at warped centre position,

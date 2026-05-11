@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.1] — 2025-05
+
+### Bug Fixes
+
+- `crt_convergence_v_spread` uniform is declared inside `#if ENABLE_CONVERGENCE` but the code was inside `#if ENABLE_PREBLUR` only — compile error when `ENABLE_PREBLUR=1` and `ENABLE_CONVERGENCE=0`. Fixed by adding `#if ENABLE_CONVERGENCE` gate around the code block
+
+---
+
 ## [1.1.0] — 2025-05
 
 ### New Feature Gates

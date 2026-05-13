@@ -188,6 +188,10 @@ The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through
 4. Check dark and midtone areas — they should show clear phosphor texture. If they look too dark, raise Mask Boost. If the texture is too harsh, lower Phosphor Sharpness
 5. Once you are satisfied with how the image looks at Mask Strength 1.0, **set Mask Strength back to your preferred value** (typically 0.4–0.7). The calibration you did at full strength defines the character of the effect; reducing strength scales it proportionally without changing the highlight behaviour
 
+- **Phosphor Dot Structure** — subtle per-dot luminance variation simulating manufacturing imperfections in the phosphor coating. Uses spatially-correlated 3×3 neighbourhood averaging so adjacent dots vary smoothly rather than per-pixel noise. Pattern re-randomises every 10 minutes for burn-in protection. 0.005–0.015 = authentic subtle texture, above 0.02 becomes noticeably uneven
+
+**Anti Burn-In** — two mechanisms to prevent static mask patterns from burning into the panel, using integer triad-width steps (visually identical but different display pixels receive each phosphor). Phase: half-triad alternation on a slow timer. Orbit: quarter-triad stepping through 4 positions. Both require their respective `ENABLE_BURNIN_PHASE` / `ENABLE_BURNIN_ORBIT` gates.
+
 ### Scanlines
 - **Scanline Strength** — depth of dark scanlines between phosphor rows
 - **Scanline Sigma** — softness of the scanline edge

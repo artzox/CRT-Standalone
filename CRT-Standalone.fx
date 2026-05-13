@@ -555,8 +555,9 @@ uniform float crt_phosphor_dot <
                  "dots/stripes, simulating manufacturing imperfections in the\n"
                  "phosphor coating. Almost invisible individually but adds texture\n"
                  "and organic feel at high magnification.\n"
-                 "0.0 = disabled (default). 0.02-0.05 = authentic subtle texture.";
-    ui_min = 0.0; ui_max = 0.15; ui_step = 0.005;
+                 "0.0 = disabled (default). 0.005-0.015 = authentic subtle texture.\n"
+                 "Above 0.02 becomes noticeably uneven.";
+    ui_min = 0.0; ui_max = 0.05; ui_step = 0.002;
 > = 0.0;
 
 uniform int crt_mask_type <
@@ -2158,13 +2159,13 @@ uniform float crt_soop_hdr10_peak_nits <
 uniform float crt_timer < source = "timer"; >;
 
 // ============================================================
-// Uniforms -- Anti Burn-In
+// Uniforms -- Anti Burn-In (under Mask category)
 // ============================================================
 
 #if ENABLE_BURNIN_PHASE
 uniform float crt_burnin_phase_amp <
     ui_type = "drag"; ui_label = "Phase Shift Amplitude (pixels)";
-    ui_category = "Anti Burn-In";
+    ui_category = "Mask";
     ui_tooltip = "How many pixels the mask and scanline patterns shift during each cycle.\n"
                  "1-2 pixels is enough to distribute phosphor wear.\n"
                  "Set ENABLE_BURNIN_PHASE=0 in preprocessor to disable entirely.";
@@ -2173,7 +2174,7 @@ uniform float crt_burnin_phase_amp <
 
 uniform float crt_burnin_phase_period <
     ui_type = "drag"; ui_label = "Phase Shift Period (minutes)";
-    ui_category = "Anti Burn-In";
+    ui_category = "Mask";
     ui_tooltip = "How long one full phase cycle takes in minutes.\n"
                  "Longer = slower, less noticeable movement.\n"
                  "Recommended: 3-5 minutes.";
@@ -2184,7 +2185,7 @@ uniform float crt_burnin_phase_period <
 #if ENABLE_BURNIN_ORBIT
 uniform float crt_burnin_orbit_radius <
     ui_type = "drag"; ui_label = "Pixel Orbit Radius (pixels)";
-    ui_category = "Anti Burn-In";
+    ui_category = "Mask";
     ui_tooltip = "Radius of the slow circular pixel shift applied to the entire image.\n"
                  "1-2 pixels is imperceptible but effective for burn-in protection.\n"
                  "Set ENABLE_BURNIN_ORBIT=0 in preprocessor to disable entirely.";
@@ -2193,7 +2194,7 @@ uniform float crt_burnin_orbit_radius <
 
 uniform float crt_burnin_orbit_period <
     ui_type = "drag"; ui_label = "Pixel Orbit Period (minutes)";
-    ui_category = "Anti Burn-In";
+    ui_category = "Mask";
     ui_tooltip = "How long one full orbit cycle takes in minutes.\n"
                  "Use a different value than the phase period to avoid synchronisation.\n"
                  "Recommended: 7-10 minutes.";
@@ -3833,8 +3834,20 @@ void crt_main_PS(
         // Phosphor dot structure: subtle per-dot luminance variation
         if (crt_phosphor_dot > 0.001)
         {
-            uint dot_seed = uint(fc_mask.x) * 2333u + uint(fc_mask.y) * 3571u;
-            float dot_var = grain_unorm1(grain_uhash(dot_seed)) * 2.0 - 1.0;
+            // Spatially-correlated noise: average hash over a 3x3 neighbourhood
+            // in mask-cell space so adjacent phosphors vary smoothly.
+            // Slow temporal drift every 10 minutes for burn-in protection.
+            uint  drift    = uint(CRT_TIMER / 600000.0);
+            uint2 mc       = uint2(uint(fc_mask.x), uint(fc_mask.y));
+            float dot_acc  = 0.0;
+            for (int ddy = -1; ddy <= 1; ddy++)
+            for (int ddx = -1; ddx <= 1; ddx++)
+            {
+                uint2 nb   = mc + uint2(ddx, ddy);
+                uint  seed = nb.x * 2333u + nb.y * 3571u + drift * 0xB5297A4Du;
+                dot_acc   += grain_unorm1(grain_uhash(seed));
+            }
+            float dot_var  = (dot_acc / 9.0 - 0.5) * 2.0; // normalise to [-1,+1]
             mask *= 1.0 + dot_var * crt_phosphor_dot;
             mask  = max(mask, 0.0);
         }
@@ -5084,61 +5097,6 @@ void crt_decay_PS(
 // ============================================================
 // Technique
 // ============================================================
-
-// ============================================================
-// Composite video pass -- Y/C separation with independent luma/chroma bandwidth
-// ============================================================
-#if ENABLE_COMPOSITE
-void crt_composite_PS(
-    in  float4 position : SV_Position,
-    in  float2 texcoord : TEXCOORD0,
-    out float4 color    : SV_Target)
-{
-    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    float px = ReShade::PixelSize.x;
-
-    // Extract luma
-    float luma = dot(c, float3(0.299, 0.587, 0.114));
-
-    // Chroma blur: box blur colour channels horizontally
-    if (crt_composite_chroma_blur > 0.001)
-    {
-        // Box blur colour channels with width proportional to chroma_blur.
-        // No triangle weighting -- flat box gives stronger, more visible bleed.
-        int   taps       = int(ceil(crt_composite_chroma_blur * 2.0));
-        float3 chroma_sum = 0.0;
-        for (int i = -taps; i <= taps; i++)
-        {
-            float2 uv = texcoord + float2((float(i) + crt_composite_chroma_phase) * px, 0.0);
-            chroma_sum += tex2D(ReShade::BackBuffer, uv).rgb;
-        }
-        float3 c_blurred = chroma_sum / float(2*taps + 1);
-
-        // Correct luma-preserving recombine:
-        // Scale blurred RGB so its luma matches original luma exactly.
-        float luma_blurred = dot(c_blurred, float3(0.299, 0.587, 0.114));
-        float luma_ratio   = (luma_blurred > 0.0001) ? luma / luma_blurred : 1.0;
-        c = c_blurred * luma_ratio;
-    }
-
-    // Luma sharpness boost: unsharp mask on luma channel, sampled from c (post-blur)
-    if (crt_composite_luma_sharpen > 0.001)
-    {
-        float3 left  = tex2D(ReShade::BackBuffer, texcoord - float2(px * 2.0, 0.0)).rgb;
-        float3 right = tex2D(ReShade::BackBuffer, texcoord + float2(px * 2.0, 0.0)).rgb;
-        float luma_l = dot(left,  float3(0.299, 0.587, 0.114));
-        float luma_r = dot(right, float3(0.299, 0.587, 0.114));
-        // Apply sharpening as a luminance scale to preserve hue
-        float edge      = luma - 0.5*(luma_l + luma_r);
-        float luma_sharp = max(luma + edge * crt_composite_luma_sharpen, 0.0001);
-        c *= luma_sharp / max(luma, 0.0001);
-        c  = max(c, 0.0);
-    }
-
-    color = float4(c, 1.0);
-}
-#endif // ENABLE_COMPOSITE
-
 // ============================================================
 // Screen reflection pass -- faint blurred self-reflection at screen edges
 // Simulates thick CRT glass internal reflection: bright content near edges

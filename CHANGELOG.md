@@ -13,6 +13,14 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 ### Bug Fixes
 
 - `crt_convergence_v_spread` uniform is declared inside `#if ENABLE_CONVERGENCE` but the code was inside `#if ENABLE_PREBLUR` only — compile error when `ENABLE_PREBLUR=1` and `ENABLE_CONVERGENCE=0`. Fixed by adding `#if ENABLE_CONVERGENCE` gate around the code block
+- Dead `crt_composite_PS` function left in shader after composite was moved inline — removed
+- Full gate audit: 170 uniforms checked, no additional mismatches found beyond the above
+
+### Improvements
+
+- **Phosphor dot structure** — replaced per-pixel hash with spatially-correlated 3×3 neighbourhood average. Adjacent dots now vary smoothly rather than independently, matching the cluster-scale variation of real phosphor manufacturing. Effective variance reduced by `1/sqrt(9)`. Range tightened to 0–0.05, recommended 0.005–0.015
+- **Phosphor dot burn-in protection** — dot pattern now re-randomises every 10 minutes via `CRT_TIMER / 600000` temporal salt, distributing luminance variation across different display pixels over time
+- **Anti Burn-In controls** moved to Mask category in UI — logically grouped with other mask controls
 
 ---
 

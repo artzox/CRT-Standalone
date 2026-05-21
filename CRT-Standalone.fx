@@ -2834,6 +2834,26 @@ float gauss(float x, float sigma)
     return exp(-(x*x) / (2.0*sigma*sigma));
 }
 
+// Fast erf approximation (Abramowitz & Stegun 7.1.26, max error 1.5e-7)
+float crt_erf(float x)
+{
+    float t = 1.0 / (1.0 + 0.3275911 * abs(x));
+    float p = t * (0.254829592
+              + t * (-0.284496736
+              + t * (1.421413741
+              + t * (-1.453152027
+              + t *  1.061405429))));
+    return sign(x) * (1.0 - p * exp(-(x*x)));
+}
+
+// Analytically integrate Gaussian over pixel footprint [f-hw, f+hw].
+// Eliminates stairstepping by giving the exact beam fraction per pixel.
+float gauss_integral(float f, float hw, float sigma)
+{
+    float s = sigma * 1.41421356; // sigma * sqrt(2)
+    return 0.5 * (crt_erf((f + hw) / s) - crt_erf((f - hw) / s));
+}
+
 // ============================================================
 // Geometry warp: pincushion UV distortion applied at source
 // sampling to keep scanlines/mask geometrically straight.
@@ -3881,11 +3901,13 @@ void crt_main_PS(
     // to avoid floating point precision errors at period boundaries.
     float scanline_y = floor(fc.y) + 0.5;
     float f  = frac(scanline_y / scan_width) - 0.5;
-    float fw = fwidth(fc.y / scan_width);
-    float fa = f - fw * 0.5;
-    float fb = f + fw * 0.5;
-    float da = abs(fa) * 2.0;
-    float db = abs(fb) * 2.0;
+    // Analytical half-pixel width in normalised scanline units.
+    // gauss_integral uses this to integrate the beam over the exact pixel footprint,
+    // giving a smooth continuous result with no stairstepping.
+    float hw = 0.5 / max(scan_width, 1.0);
+    // Keep da/db for megatron_scanline beam_dist (expects 0-1 range)
+    float da = abs(f - hw) * 2.0;
+    float db = abs(f + hw) * 2.0;
 
     #if ENABLE_BEAM_MODULATION
         // Luminance-dependent beam width. Sigma is in normalised scanline-period
@@ -3897,16 +3919,17 @@ void crt_main_PS(
         float r_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.r)) * sigma_scale;
         float g_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.g)) * sigma_scale;
         float b_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.b)) * sigma_scale;
-        float beam_r = 0.5*(gauss(fa, r_sigma) + gauss(fb, r_sigma));
-        float beam_g = 0.5*(gauss(fa, g_sigma) + gauss(fb, g_sigma));
-        float beam_b = 0.5*(gauss(fa, b_sigma) + gauss(fb, b_sigma));
+        // Analytical integral -- exact Gaussian fraction per pixel, no stairstepping
+        float beam_r = gauss_integral(f, hw, r_sigma);
+        float beam_g = gauss_integral(f, hw, g_sigma);
+        float beam_b = gauss_integral(f, hw, b_sigma);
     #else
-        float beam_r = 0.5*(megatron_scanline(c_lin.r,da,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack)*gauss(fa,crt_scanline_sigma)
-                           +megatron_scanline(c_lin.r,db,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack)*gauss(fb,crt_scanline_sigma));
-        float beam_g = 0.5*(megatron_scanline(c_lin.g,da,crt_g_scanline_min,crt_g_scanline_max,crt_g_scanline_attack)*gauss(fa,crt_scanline_sigma)
-                           +megatron_scanline(c_lin.g,db,crt_g_scanline_min,crt_g_scanline_max,crt_g_scanline_attack)*gauss(fb,crt_scanline_sigma));
-        float beam_b = 0.5*(megatron_scanline(c_lin.b,da,crt_b_scanline_min,crt_b_scanline_max,crt_b_scanline_attack)*gauss(fa,crt_scanline_sigma)
-                           +megatron_scanline(c_lin.b,db,crt_b_scanline_min,crt_b_scanline_max,crt_b_scanline_attack)*gauss(fb,crt_scanline_sigma));
+        // Analytical integral -- exact Gaussian fraction per pixel, no stairstepping
+        float gi_s   = gauss_integral(f, hw, crt_scanline_sigma);
+        float bd     = abs(f) * 2.0; // beam_dist for megatron at pixel centre
+        float beam_r = megatron_scanline(c_lin.r,bd,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack) * gi_s;
+        float beam_g = megatron_scanline(c_lin.g,bd,crt_g_scanline_min,crt_g_scanline_max,crt_g_scanline_attack) * gi_s;
+        float beam_b = megatron_scanline(c_lin.b,bd,crt_b_scanline_min,crt_b_scanline_max,crt_b_scanline_attack) * gi_s;
     #endif
 
     c_lin *= lerp(1.0, float3(beam_r, beam_g, beam_b), crt_scanline_strength);

@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.2] — 2025-05
+
+### Improvements
+
+- **Scanline anti-aliasing** — replaced the `fwidth`-based two-point Gaussian approximation with an analytically integrated Gaussian using a fast `erf` approximation (Abramowitz & Stegun 7.1.26, max error 1.5×10⁻⁷). The integral `0.5 × (erf((f + hw) / σ√2) − erf((f − hw) / σ√2))` gives the exact fraction of the Gaussian beam that falls within each pixel's footprint, producing a continuous, step-free scanline profile at any subpixel position. Based on the approach used in CRT Royale. Both the beam modulation path and the standard path updated. No visual change to default presets — existing presets do not require re-tuning
+
+---
+
 ## [1.1.1] — 2025-05
 
 ### Bug Fixes

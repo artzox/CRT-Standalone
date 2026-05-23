@@ -12,8 +12,8 @@ Set these in the ReShade **Preprocessor Definitions** panel (not the sliders):
 
 | Define | What to set |
 |---|---|
-| `PIPELINE` | **0** = SDR (default). **1** = scRGB HDR (recommended for HDR games with Soop). **2** = HDR10 |
-| `GLOW_RESOLUTION` | **2** = half resolution (default, recommended). **1** = full resolution (use if you see double-image artefacts in some games) |
+| `PIPELINE` | **0** = SDR (default). **1** = scRGB HDR (recommended for HDR games with Soop). **2** = HDR10 / wide-gamut (use if the game outputs DCI-P3 or BT.2020 — see Troubleshooting) |
+| `GLOW_RESOLUTION` | **2** = half resolution (default, recommended). **1** = full resolution (use if you see double-image artefacts or aliasing on glow — expect a performance penalty) |
 | `ENABLE_GEOMETRY` | **1** to enable screen curvature warp with Lanczos reconstruction |
 | `ENABLE_LIGHT_WARP` | **1** for lightweight barrel distortion (cheaper than full geometry) |
 | `ENABLE_CORNER_ROUND` | **1** for rounded screen corners with bezel shadow |
@@ -518,6 +518,22 @@ The shader includes several preprocessor defines to trade quality for performanc
 | `ENABLE_PERSISTENCE=0` | Low | Remove persistence simulation |
 | `ENABLE_DECAY=0` | Medium | Removes all BFI passes |
 | `PREBLUR_RESOLUTION=2` | Medium | **Visible quality loss — not recommended** |
+
+---
+
+## Troubleshooting
+
+### Image Degradation or Aliasing on Glow
+
+If you notice aliasing, shimmering, or reduced quality on the glow/halation output, try setting `GLOW_RESOLUTION=1` in the preprocessor definitions. This switches the glow textures to full resolution instead of the default half resolution, which eliminates the quality loss. Expect a moderate performance penalty — the glow passes will cost more GPU time at full resolution.
+
+### Colour Inversion or Blue Tint on Warm Content (Pipeline 0)
+
+Some games output colours outside the standard Rec.709/sRGB gamut to the backbuffer — for example DCI-P3 or BT.2020 primaries. On `PIPELINE=0` the shader assumes sRGB input, which can cause blue channel inversion or warm colour casts on games with wider gamut output.
+
+**How to detect:** Use [Lilium's HDR Analysis](https://github.com/EndlesslyFlowering/ReShade_HDR_shaders) shader. If it shows DCI-P3 or BT.2020 coverage above ~10% with the CRT shader active, this is likely the cause.
+
+**Fix:** Switch to `PIPELINE=2` in the preprocessor definitions. The HDR10 soop path is colour-space agnostic and handles wide-gamut content correctly without the matrix conversion issues that cause inversion on Pipeline 0. Example game where this applies: *Keeper*.
 
 ---
 

@@ -734,6 +734,26 @@ uniform float crt_beam_h_bloom <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
 > = 0.0;
 
+uniform float crt_scanline_roll_strength <
+    ui_type = "drag"; ui_label = "Scanline Row Variation";
+    ui_category = "Scanlines";
+    ui_tooltip = "Subtle brightness variation between individual scanline rows,\n"
+                 "simulating high-voltage supply ripple and phosphor coating\n"
+                 "unevenness in real CRTs.\n"
+                 "\n"
+                 "Adjacent rows vary together (spatially correlated) -- reads\n"
+                 "as organic texture on large uniform areas like sky or fog,\n"
+                 "not as noise or grain.\n"
+                 "\n"
+                 "0.0 = disabled (default, perfectly uniform scanlines).\n"
+                 "0.01-0.03 = authentic subtle variation.\n"
+                 "0.05-0.08 = clearly visible texture on uniform areas.\n"
+                 "\n"
+                 "Only visible on large uniform image areas. Invisible during\n"
+                 "normal gameplay where image content dominates.";
+    ui_min = 0.0; ui_max = 0.15; ui_step = 0.005;
+> = 0.0;
+
 uniform float crt_beam_min_sigma <
     ui_type = "drag"; ui_label = "Beam Sigma Dark (pixels)";
     ui_category = "Scanlines";
@@ -2798,19 +2818,21 @@ float3 apply_bcs(float3 c, float brightness, float contrast, float saturation)
     float Y_out   = pow(max(Y_c, 0.0), 2.4) * Y_peak;
 
     // Scale input RGB by the ratio of new to old max channel
-    // This applies the brightness/contrast curve while preserving
-    // the exact chromaticity of the original colour
     float3 rgb = (Y_lin > 0.0001) ? c * (Y_out / Y_lin) : c;
 
-// No gamut clipping needed -- scaling preserves exact input chromaticity
-    // BCS_GAMUT_CLAMP=1 adds a hard safety clamp if needed for edge cases
+    // Clamp negatives -- wide-gamut content (DCI-P3, BT.2020) can produce
+    // negative Rec.709 values after the XYZ round-trip. A zero floor prevents
+    // downstream inversion without affecting in-gamut content.
+    rgb = max(rgb, 0.0);
+
 #if BCS_GAMUT_CLAMP
     rgb = clamp(rgb, 0.0, 1.0);
 #endif
 
-    float  luma  = dot(max(rgb, 0.0), float3(0.2125, 0.7154, 0.0721));
+    float  luma  = dot(rgb, float3(0.2125, 0.7154, 0.0721));
     float  sat   = 0.5 + saturation * 0.5;
     rgb = lerp(luma, rgb, sat * 2.0);
+    rgb = max(rgb, 0.0); // guard saturation lerp against negative luma
 
     return rgb;
 #endif
@@ -2847,11 +2869,24 @@ float crt_erf(float x)
 }
 
 // Analytically integrate Gaussian over pixel footprint [f-hw, f+hw].
-// Eliminates stairstepping by giving the exact beam fraction per pixel.
+// Eliminates stairstepping at any subpixel position.
 float gauss_integral(float f, float hw, float sigma)
 {
     float s = sigma * 1.41421356; // sigma * sqrt(2)
     return 0.5 * (crt_erf((f + hw) / s) - crt_erf((f - hw) / s));
+}
+
+// Per-scanline brightness variation.
+// Spatially correlated low-frequency hash -- adjacent rows similar, not random.
+// Models HV supply ripple + phosphor coating unevenness in real CRTs.
+float crt_scanline_roll(float row)
+{
+    // Two overlapping sine waves at incommensurable frequencies
+    // driven by row index -- deterministic, stable, spatially correlated
+    float r = floor(row);
+    float s1 = sin(r * 0.3731 + 1.4142) * 0.6;
+    float s2 = sin(r * 0.1171 + 2.7183) * 0.4;
+    return s1 + s2; // range approx [-1, 1]
 }
 
 // ============================================================
@@ -3825,9 +3860,31 @@ void crt_main_PS(
     if (abs(crt_brightness)>0.001 || abs(crt_contrast)>0.001 || abs(crt_saturation)>0.001)
     {
         #if PIPELINE >= 1
-        float3 c_bcs_lin = to_linear(max(c, 0.0));
-        c_bcs_lin = apply_bcs(c_bcs_lin, crt_brightness, crt_contrast, crt_saturation);
-        c = from_linear(max(c_bcs_lin, 0.0));
+        // Pipeline 1/2: c is already in Reinhard-compressed linear space (soop sandwich).
+        // Apply BCS directly without sRGB encode/decode wrappers -- the Yxy matrix
+        // path in apply_bcs assumes sRGB-encoded input and produces warm skew on linear data.
+        // Use a simple luma-ratio scale approach that is colour-space agnostic.
+        {
+            float3 c_s    = max(c, 0.0);
+            float  ch_max = max(max(c_s.r, c_s.g), c_s.b);
+            float  Y_lin  = max(ch_max, 0.0);
+            float  Y_peak = max(Y_lin, 1.0);
+            float  Y_norm = Y_lin / Y_peak;
+            float  Y_g    = pow(clamp(Y_norm, 0.0, 1.0), 1.0/2.4);
+            float  Y_b    = (crt_brightness >= 0.0)
+                          ? Bezier(Y_g, lerp(kMidBrightness, kTopBrightness, crt_brightness))
+                          : Bezier(Y_g, lerp(kMidBrightness, kBotBrightness, -crt_brightness));
+            float  Y_c    = (crt_contrast >= 0.0)
+                          ? Bezier(Y_b, lerp(kMidContrast, kTopContrast, crt_contrast))
+                          : Bezier(Y_b, lerp(kMidContrast, kBotContrast, -crt_contrast));
+            float  Y_out  = pow(max(Y_c, 0.0), 2.4) * Y_peak;
+            c = (Y_lin > 0.0001) ? c_s * (Y_out / Y_lin) : c_s;
+            // Saturation: lerp toward peak-normalised luma
+            float  luma_s = dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722));
+            float  sat    = 0.5 + crt_saturation * 0.5;
+            c = lerp(float3(luma_s,luma_s,luma_s), c, sat * 2.0);
+            c = max(c, 0.0);
+        }
         #else
         c = apply_bcs(c, crt_brightness, crt_contrast, crt_saturation);
         #endif
@@ -3898,35 +3955,35 @@ void crt_main_PS(
     // Applied here (to the scanline period) not as a UV shift, so the actual
     // dark gaps between scanlines move position rather than the whole image shifting.
     // Snap to integer pixel coordinates before scanline calculation
-    // to avoid floating point precision errors at period boundaries.
     float scanline_y = floor(fc.y) + 0.5;
     float f  = frac(scanline_y / scan_width) - 0.5;
-    // Analytical half-pixel width in normalised scanline units.
-    // gauss_integral uses this to integrate the beam over the exact pixel footprint,
-    // giving a smooth continuous result with no stairstepping.
+    // Analytical half-pixel width -- used by gauss_integral for step-free beam profile
     float hw = 0.5 / max(scan_width, 1.0);
-    // Keep da/db for megatron_scanline beam_dist (expects 0-1 range)
     float da = abs(f - hw) * 2.0;
     float db = abs(f + hw) * 2.0;
 
+    // Per-scanline brightness variation: spatially correlated low-frequency
+    // variation between rows simulating HV ripple and phosphor unevenness.
+    // Applied as a multiplicative factor on the lit scanline peak brightness.
+    // Only affects the bright portion (beam peak), not the dark gaps.
+    float scanline_row = floor(scanline_y / scan_width);
+    float roll = (crt_scanline_roll_strength > 0.0001)
+               ? 1.0 + crt_scanline_roll_strength * crt_scanline_roll(scanline_row)
+               : 1.0;
+
     #if ENABLE_BEAM_MODULATION
-        // Luminance-dependent beam width. Sigma is in normalised scanline-period
-        // units where f ∈ [-0.5, 0.5]. Scale by 1/scan_width converts from pixel
-        // units so sigma=1.0 = 1 pixel regardless of scanline width.
-        // For a dark gap: gauss(0.5, sigma_norm) must be near 0.
-        // This requires sigma_norm < 0.2 -- i.e. sigma_pixels < 0.2*scan_width.
         float sigma_scale = 1.0 / max(scan_width, 1.0);
         float r_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.r)) * sigma_scale;
         float g_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.g)) * sigma_scale;
         float b_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.b)) * sigma_scale;
-        // Analytical integral -- exact Gaussian fraction per pixel, no stairstepping
-        float beam_r = gauss_integral(f, hw, r_sigma);
-        float beam_g = gauss_integral(f, hw, g_sigma);
-        float beam_b = gauss_integral(f, hw, b_sigma);
+        // Analytical Gaussian integral -- no stairstepping
+        float beam_r = gauss_integral(f, hw, r_sigma) * roll;
+        float beam_g = gauss_integral(f, hw, g_sigma) * roll;
+        float beam_b = gauss_integral(f, hw, b_sigma) * roll;
     #else
-        // Analytical integral -- exact Gaussian fraction per pixel, no stairstepping
-        float gi_s   = gauss_integral(f, hw, crt_scanline_sigma);
-        float bd     = abs(f) * 2.0; // beam_dist for megatron at pixel centre
+        // Analytical integral with megatron scanline shaping
+        float gi_s   = gauss_integral(f, hw, crt_scanline_sigma) * roll;
+        float bd     = abs(f) * 2.0;
         float beam_r = megatron_scanline(c_lin.r,bd,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack) * gi_s;
         float beam_g = megatron_scanline(c_lin.g,bd,crt_g_scanline_min,crt_g_scanline_max,crt_g_scanline_attack) * gi_s;
         float beam_b = megatron_scanline(c_lin.b,bd,crt_b_scanline_min,crt_b_scanline_max,crt_b_scanline_attack) * gi_s;
@@ -4002,36 +4059,39 @@ void crt_main_PS(
         }
     }
 
+    // -- Brightboost (applied in linear space before re-encode) --
+    // Operating in linear c_lin avoids gamma/Reinhard-induced warm skew
+    // on Pipeline 2 where c_lin is Reinhard-compressed linear.
+    if (crt_bb_dark != 1.0 || crt_bb_bright != 1.0)
+    {
+        if (crt_bb_mode == 0)
+        {
+            // Peak channel: colour-agnostic
+            float bb_ref    = max(max(c_lin.r, c_lin.g), c_lin.b);
+            float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, saturate(bb_ref));
+            float bb_ratio0 = max(bb_gain, 0.0);
+            c_lin = max(c_lin * bb_ratio0, 0.0);
+        }
+        else if (crt_bb_mode == 1)
+        {
+            // Luma mode: Rec.709 weighted in linear space -- correct
+            float bb_luma   = dot(max(c_lin, 0.0), float3(0.2126, 0.7152, 0.0722));
+            float bb_ref    = max(max(c_lin.r, c_lin.g), c_lin.b);
+            float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, saturate(bb_ref));
+            float bb_out    = bb_luma * bb_gain;
+            float bb_ratio  = (bb_luma > 0.0001) ? max(bb_out / bb_luma, 0.0) : 1.0;
+            c_lin = max(c_lin * bb_ratio, 0.0);
+        }
+        else
+        {
+            // Per channel: lerp weights in linear space -- no warm skew
+            float3 bb_gain3 = lerp(crt_bb_dark, crt_bb_bright, saturate(c_lin));
+            c_lin = max(c_lin * bb_gain3, 0.0);
+        }
+    }
+
     // -- Re-encode --
     c = crt_from_linear(c_lin);
-
-    // -- Brightboost (hue-preserving) --
-    if (crt_bb_mode == 0)
-    {
-        // Peak channel mode: colour-agnostic, correct for CRT phosphor physics
-        float bb_ref    = max(max(c.r, c.g), c.b);
-        float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, bb_ref);
-        float bb_out    = bb_ref * bb_gain;
-        c = (bb_ref > 0.0001) ? c * (bb_out / bb_ref) : c;
-    }
-    else if (crt_bb_mode == 1)
-    {
-        // Luma mode: perceptually weighted (Rec.709), may under-represent blue
-        float bb_luma   = dot(c, float3(0.2126, 0.7152, 0.0722));
-        float bb_ref    = max(max(c.r, c.g), c.b);
-        float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, bb_ref);
-        float bb_out    = bb_luma * bb_gain;
-        c = (bb_luma > 0.0001) ? c * (bb_out / bb_luma) : c;
-    }
-    else
-    {
-        // Per channel mode: each channel boosted by its own value independently.
-        // Eliminates the peak-channel bias that causes warm/cool hue shifts at
-        // high bb_dark values. Each channel sits at its own point on the
-        // lerp(bb_dark, bb_bright, channel) curve.
-        float3 bb_gain3 = lerp(crt_bb_dark, crt_bb_bright, c);
-        c *= bb_gain3;
-    }
 
     // -- Vignette --
     #if ENABLE_VIGNETTE

@@ -8,6 +8,26 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.3] — 2025-05
+
+### Bug Fixes
+
+- **BCS warm skew on Pipeline 1/2** — brightness, contrast, and saturation were applying the Yxy matrix path (which assumes sRGB-encoded input) to Reinhard-compressed linear values inside the soop sandwich. Replaced with a colour-space agnostic max-channel Bezier path for `PIPELINE >= 1` that operates correctly on linear data without XYZ round-trip distortion
+- **Brightboost warm skew on Pipeline 1/2** — brightboost was operating on the gamma re-encoded `c` after `crt_from_linear`. Moved to operate on `c_lin` before re-encoding. All three modes now use `saturate(c_lin)` as the lerp reference, correct in Reinhard-compressed linear space
+- **BCS negative values from wide-gamut input (Pipeline 0)** — DCI-P3 and BT.2020 content produces negative Rec.709 values after the `k709_to_XYZ` round-trip. Added `max(rgb, 0.0)` floor after the BCS scale operation to prevent downstream colour inversion
+- **Brightboost division inversion** — modes 0 and 1 used unguarded division which could produce negative values when `bb_bright < 1.0` and scanline gap pixels had near-zero luminance. Added `max(ratio, 0.0)` guard and `max(c * ratio, 0.0)` output clamp
+
+---
+
+## [1.1.2] — 2025-05
+
+### Improvements
+
+- **Scanline analytical integration** — replaced the `fwidth`-based two-point Gaussian approximation with analytically integrated Gaussian using a fast `erf` approximation (Abramowitz & Stegun 7.1.26, max error 1.5×10⁻⁷). Gives exact Gaussian fraction per pixel footprint, eliminating stairstepping at any subpixel position. Both beam modulation and standard paths updated. Existing presets do not require re-tuning
+- **Per-scanline brightness variation** — added `crt_scanline_roll()` using two incommensurable sine waves (0.3731 and 0.1171 rad/row) for spatially correlated, stable brightness variation between rows. Models HV supply ripple and phosphor coating unevenness. Controlled by `crt_scanline_roll_strength` (default 0.0, range 0–0.15). Runtime-gated: `sin()` calls skipped when strength = 0
+
+---
+
 ## [1.1.1] — 2025-05
 
 ### Bug Fixes

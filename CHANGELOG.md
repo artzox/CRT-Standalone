@@ -8,6 +8,19 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.5] — 2025-05
+
+### New Features
+
+- **Emulsion Mode grain** (`crt_grain_emulsion`, default off) — Voronoi-based grain simulation replacing Gaussian noise when enabled. Creates genuine silver halide cluster shapes with harder edges rather than blurred noise. Per-channel grain sizes match physical emulsion layer stack: blue layer coarsest (top), green mid, red finest (deepest). Includes highlight residual floor simulating Dmax grain density always present in real film. `crt_grain_size` and `crt_grain_intensity` sliders control scale and amplitude as in standard mode
+
+### Bug Fixes
+
+- **`pow()` guard in `from_linear()`** — `pow(x, 1/2.4)` without `max(x, 0)` guard caused pipeline creation failure (pass 0) when recompiling with `ENABLE_DECAY` toggled on certain shader permutations. Added `max(x, 0.0)` to both `from_linear` implementations
+- **Pipeline 1 colour washout regression** — BCS and brightboost were incorrectly moved to operate in linear `c_lin` space during a warm skew investigation. This broke Pipeline 1 colour rendering. Both reverted to original positions: BCS uses `to_linear → apply_bcs → from_linear` wrapper, brightboost operates on gamma-encoded `c` after `crt_from_linear`
+
+---
+
 ## [1.1.4] — 2025-05
 
 ### New Features

@@ -1610,6 +1610,18 @@ uniform float crt_grain_shadows <
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.0;
 
+uniform bool crt_grain_emulsion <
+    ui_type     = "input"; ui_label = "Emulsion Mode";
+    ui_category = "Film Grain";
+    ui_tooltip  = "Switches from Gaussian noise to Voronoi emulsion simulation.\n"
+                  "Creates genuine grain blobs/clusters with hard edges,\n"
+                  "matching the silver halide crystal clustering in real film.\n"
+                  "Per-channel grain sizes: blue coarsest (top emulsion layer),\n"
+                  "green mid, red finest (deepest layer) -- physically correct.\n"
+                  "Includes highlight residual floor (Dmax grain density).\n"
+                  "Slightly more expensive than standard Gaussian grain.";
+> = false;
+
 uniform float crt_grain_size <
     ui_type = "drag"; ui_label = "Grain Size";
     ui_category = "Film Grain";
@@ -3294,14 +3306,71 @@ float3 grain_sdr(float3 c) { float w=1+rcp(1e-6+GWP); return w*c*rcp(1+c); }
 // Analytical Poisson variance for film grain.
 // Models highlight rolloff: grain peaks at midtones (luma=0.5) and rolls
 // off in both shadows and highlights -- luma*(1-luma) peaks at 0.25 when luma=0.5.
-// Scaled to match the original amplitude: at luma=0.5, output = intensity^2 * 0.35.
-// poisson_shape(0.5) = 0.5*0.5 = 0.25, so scale = 0.35/0.25 = 1.4
 float grain_poisson_sigma(float luma, float intensity)
 {
-    // poisson_shape peaks at 0.25 (luma=0.5). Scale by 4.0 so the midtone
-    // amplitude exactly matches the original intensity^2 * 0.35 formula.
     float poisson_shape = luma * (1.0 - luma);
     return (intensity * intensity * 0.35) * (poisson_shape * 4.0);
+}
+
+// Voronoi grain: scatter seed points, each pixel gets value of nearest seed.
+// Creates genuine blob/cluster structure -- cannot be replicated by blurring noise.
+// cell_size controls blob scale. Returns value in [-1, 1].
+float grain_voronoi(float2 pos, float cell_size, uint frame_salt)
+{
+    float2 cell    = floor(pos / cell_size);
+    float  min_d   = 1e9;
+    float  val     = 0.0;
+
+    // Check 3x3 neighbourhood of cells
+    for (int cy = -1; cy <= 1; cy++)
+    for (int cx = -1; cx <= 1; cx++)
+    {
+        float2 nc     = cell + float2(cx, cy);
+        uint   seed   = grain_uhash(grain_uhash(uint(nc.y * 1031.0 + 7919.0))
+                      + uint(nc.x * 3571.0 + 5003.0) + frame_salt);
+        // Jitter seed point within cell
+        float2 jitter = float2(grain_unorm1(seed),
+                               grain_unorm1(grain_uhash(seed))) * 0.5 + 0.5;
+        float2 sp     = (nc + jitter) * cell_size;
+        float  d      = length(pos - sp);
+        if (d < min_d)
+        {
+            min_d = d;
+            // Value from seed -- Gaussian distributed for realistic amplitude
+            float u1 = grain_unorm1(grain_uhash(seed + 1u));
+            float u2 = grain_unorm1(grain_uhash(seed + 2u));
+            val = sqrt(-2.0 * log(max(u1, 1e-6))) * cos(6.2831853 * u2);
+        }
+    }
+    return val;
+}
+
+// Per-channel grain with physically correct layer sizes.
+// Blue layer (top) is coarsest -- historically blue-sensitive grains are largest.
+// Green is mid-size. Red (deepest layer) is finest.
+// cell_scale: 1.0 = standard, >1 = coarser (higher ISO simulation).
+float3 grain_emulsion(float2 pos, float cell_scale, uint frame_salt, float intensity, float luma)
+{
+    float amp = grain_poisson_sigma(luma, intensity);
+
+    // Layer cell sizes -- ratios from typical colour negative emulsions
+    // Multipliers kept close to 1.0 so cell_scale directly controls visible size
+    float sz_b = cell_scale * 1.9; // blue: coarsest (top emulsion layer)
+    float sz_g = cell_scale * 1.4; // green: mid layer
+    float sz_r = cell_scale * 1.0; // red: finest (deepest layer)
+
+    float gR = grain_voronoi(pos, sz_r, frame_salt)           * amp;
+    float gG = grain_voronoi(pos, sz_g, frame_salt + 0x1111u) * amp;
+    float gB = grain_voronoi(pos, sz_b, frame_salt + 0x2222u) * amp;
+
+    // Highlight residual: small floor so highlights never go completely grain-free
+    // Physically represents maximum silver density at Dmax
+    float hl_floor = intensity * intensity * 0.015 * luma * luma;
+    uint  hl_seed  = grain_uhash(grain_uhash(uint(pos.y)*7919u + uint(pos.x)) + frame_salt);
+    float hl_noise = grain_unorm1(hl_seed) * 2.0 - 1.0;
+    float hl_grain = hl_noise * hl_floor;
+
+    return float3(gR + hl_grain, gG + hl_grain, gB + hl_grain);
 }
 
 // ============================================================
@@ -3956,31 +4025,9 @@ void crt_main_PS(
     if (abs(crt_brightness)>0.001 || abs(crt_contrast)>0.001 || abs(crt_saturation)>0.001)
     {
         #if PIPELINE >= 1
-        // Pipeline 1/2: c is already in Reinhard-compressed linear space (soop sandwich).
-        // Apply BCS directly without sRGB encode/decode wrappers -- the Yxy matrix
-        // path in apply_bcs assumes sRGB-encoded input and produces warm skew on linear data.
-        // Use a simple luma-ratio scale approach that is colour-space agnostic.
-        {
-            float3 c_s    = max(c, 0.0);
-            float  ch_max = max(max(c_s.r, c_s.g), c_s.b);
-            float  Y_lin  = max(ch_max, 0.0);
-            float  Y_peak = max(Y_lin, 1.0);
-            float  Y_norm = Y_lin / Y_peak;
-            float  Y_g    = pow(clamp(Y_norm, 0.0, 1.0), 1.0/2.4);
-            float  Y_b    = (crt_brightness >= 0.0)
-                          ? Bezier(Y_g, lerp(kMidBrightness, kTopBrightness, crt_brightness))
-                          : Bezier(Y_g, lerp(kMidBrightness, kBotBrightness, -crt_brightness));
-            float  Y_c    = (crt_contrast >= 0.0)
-                          ? Bezier(Y_b, lerp(kMidContrast, kTopContrast, crt_contrast))
-                          : Bezier(Y_b, lerp(kMidContrast, kBotContrast, -crt_contrast));
-            float  Y_out  = pow(max(Y_c, 0.0), 2.4) * Y_peak;
-            c = (Y_lin > 0.0001) ? c_s * (Y_out / Y_lin) : c_s;
-            // Saturation: lerp toward peak-normalised luma
-            float  luma_s = dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722));
-            float  sat    = 0.5 + crt_saturation * 0.5;
-            c = lerp(float3(luma_s,luma_s,luma_s), c, sat * 2.0);
-            c = max(c, 0.0);
-        }
+        float3 c_bcs_lin = to_linear(max(c, 0.0));
+        c_bcs_lin = apply_bcs(c_bcs_lin, crt_brightness, crt_contrast, crt_saturation);
+        c = from_linear(max(c_bcs_lin, 0.0));
         #else
         c = apply_bcs(c, crt_brightness, crt_contrast, crt_saturation);
         #endif
@@ -3988,6 +4035,9 @@ void crt_main_PS(
 
     // -- CRT gamma decode --
     float3 c_lin = crt_to_linear(c);
+    // Source colour and luma stored before any CRT processing.
+    // Post-scanline c_lin is near-zero in dark gaps -- cannot use for detail work.
+    float  c_src_luma = dot(max(c_lin, 0.0), float3(0.2126, 0.7152, 0.0722));
 
     // -- Aperture grille mask --
     #if ENABLE_MASK
@@ -4155,39 +4205,35 @@ void crt_main_PS(
         }
     }
 
-    // -- Brightboost (applied in linear space before re-encode) --
-    // Operating in linear c_lin avoids gamma/Reinhard-induced warm skew
-    // on Pipeline 2 where c_lin is Reinhard-compressed linear.
-    if (crt_bb_dark != 1.0 || crt_bb_bright != 1.0)
-    {
-        if (crt_bb_mode == 0)
-        {
-            // Peak channel: colour-agnostic
-            float bb_ref    = max(max(c_lin.r, c_lin.g), c_lin.b);
-            float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, saturate(bb_ref));
-            float bb_ratio0 = max(bb_gain, 0.0);
-            c_lin = max(c_lin * bb_ratio0, 0.0);
-        }
-        else if (crt_bb_mode == 1)
-        {
-            // Luma mode: Rec.709 weighted in linear space -- correct
-            float bb_luma   = dot(max(c_lin, 0.0), float3(0.2126, 0.7152, 0.0722));
-            float bb_ref    = max(max(c_lin.r, c_lin.g), c_lin.b);
-            float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, saturate(bb_ref));
-            float bb_out    = bb_luma * bb_gain;
-            float bb_ratio  = (bb_luma > 0.0001) ? max(bb_out / bb_luma, 0.0) : 1.0;
-            c_lin = max(c_lin * bb_ratio, 0.0);
-        }
-        else
-        {
-            // Per channel: lerp weights in linear space -- no warm skew
-            float3 bb_gain3 = lerp(crt_bb_dark, crt_bb_bright, saturate(c_lin));
-            c_lin = max(c_lin * bb_gain3, 0.0);
-        }
-    }
-
     // -- Re-encode --
     c = crt_from_linear(c_lin);
+
+    // -- Brightboost (hue-preserving) --
+    if (crt_bb_mode == 0)
+    {
+        // Peak channel mode: colour-agnostic, correct for CRT phosphor physics
+        float bb_ref    = max(max(c.r, c.g), c.b);
+        float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, bb_ref);
+        float bb_out    = bb_ref * bb_gain;
+        float bb_ratio0 = (bb_ref > 0.0001) ? max(bb_out / bb_ref, 0.0) : 1.0;
+        c = max(c * bb_ratio0, 0.0);
+    }
+    else if (crt_bb_mode == 1)
+    {
+        // Luma mode: perceptually weighted (Rec.709), may under-represent blue
+        float bb_luma   = dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722));
+        float bb_ref    = max(max(c.r, c.g), c.b);
+        float bb_gain   = lerp(crt_bb_dark, crt_bb_bright, bb_ref);
+        float bb_out    = bb_luma * bb_gain;
+        float bb_ratio  = (bb_luma > 0.0001) ? max(bb_out / bb_luma, 0.0) : 1.0;
+        c = max(c * bb_ratio, 0.0);
+    }
+    else
+    {
+        // Per channel mode: each channel boosted by its own value independently
+        float3 bb_gain3 = lerp(crt_bb_dark, crt_bb_bright, c);
+        c = max(c * bb_gain3, 0.0);
+    }
 
     // -- Vignette --
     #if ENABLE_VIGNETTE
@@ -4361,34 +4407,47 @@ void crt_grain_merged_PS(
         uint rng = grain_uhash(grain_uhash(p.y) + p.x);
         if (crt_grain_animate) rng += FRAMECOUNT;
 
-        float3 u3 = float3(grain_next2(rng), grain_next1(rng));
-        float3 gn = grain_bm3(u3);
-
-        // Improvement 2: Poisson variance replaces shadow_gate.
-        // Grain amplitude follows luma*(1-luma)/N -- peaks at midtones,
-        // rolls off in both shadows AND highlights (physically correct).
-        // shadow_gate only reduced grain in shadows, leaving highlights too crunchy.
-        float poisson_amp = grain_poisson_sigma(luma_g, crt_grain_intensity);
-        // Blend with user shadow control: crt_grain_shadows still works
-        // as a shadow floor but the highlight rolloff is now automatic.
-        float shadow_blend = lerp(crt_grain_shadows, 1.0, saturate(luma_g * 8.0));
-        poisson_amp *= shadow_blend;
-
+        float  shadow_blend = lerp(crt_grain_shadows, 1.0, saturate(luma_g * 8.0));
         float3 cl_grained;
-        if (crt_grain_colour)
+
+        if (crt_grain_emulsion)
         {
+            // Voronoi emulsion mode: genuine blob clusters with per-channel sizes
+            uint   fsalt = crt_grain_animate ? FRAMECOUNT : 0u;
+            // Calibrated: base 0.25px so size=0 matches Gaussian sub-pixel radius.
+            // Range 0.25-1.25px across slider -- user can push higher via grain_size.
+            float  cell_scale = 0.25 + crt_grain_size * 1.0;
+            float2 pos        = float2(p); // raw pixel coordinates
+            float3 gn_e  = grain_emulsion(pos, cell_scale,
+                                          fsalt, crt_grain_intensity, luma_g);
+            gn_e *= shadow_blend;
             cl_grained = grain_hdr(cl);
-            cl_grained += gn * poisson_amp;
+            cl_grained += gn_e;
             cl_grained = grain_sdr(cl_grained);
         }
         else
         {
-            float grey = dot(cl, float3(0.2126, 0.7152, 0.0722));
-            float grey3 = grain_hdr(grey.xxx).x;
-            grey3 += gn.x * poisson_amp;
-            grey3 = grain_sdr(grey3.xxx).x;
-            float orig = dot(cl, float3(0.2126, 0.7152, 0.0722));
-            cl_grained = (orig > 0.0001) ? cl * (grey3 / orig) : cl;
+            // Standard Gaussian grain (METEOR-style)
+            float3 u3 = float3(grain_next2(rng), grain_next1(rng));
+            float3 gn = grain_bm3(u3);
+            float  poisson_amp = grain_poisson_sigma(luma_g, crt_grain_intensity);
+            poisson_amp *= shadow_blend;
+
+            if (crt_grain_colour)
+            {
+                cl_grained = grain_hdr(cl);
+                cl_grained += gn * poisson_amp;
+                cl_grained = grain_sdr(cl_grained);
+            }
+            else
+            {
+                float grey  = dot(cl, float3(0.2126, 0.7152, 0.0722));
+                float grey3 = grain_hdr(grey.xxx).x;
+                grey3 += gn.x * poisson_amp;
+                grey3 = grain_sdr(grey3.xxx).x;
+                float orig  = dot(cl, float3(0.2126, 0.7152, 0.0722));
+                cl_grained  = (orig > 0.0001) ? cl * (grey3 / orig) : cl;
+            }
         }
         delta = (genc(cl_grained) - c) * 0.5 + 0.5;
     }

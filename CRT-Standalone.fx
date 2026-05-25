@@ -344,6 +344,34 @@ uniform float crt_preblur_v_radius <
     ui_min = 1.0; ui_max = 16.0; ui_step = 1.0;
 > = 6.0;
 
+uniform bool crt_preblur_luma_only <
+    ui_type     = "input"; ui_label = "Luma-Only Blur";
+    ui_category = "Pre-Blur";
+    ui_tooltip  = "Blur only the luma (Y) channel -- chroma passes through unblurred.\n"
+                  "Reduces shimmer from fine texture aliasing against scanlines\n"
+                  "without softening colours or losing colour saturation.\n"
+                  "Works with both H and V sigma independently.\n"
+                  "Recommended for temporal shimmer on detailed textures (gravel, fabric).\n"
+                  "Default on: luma-only is strictly better than full RGB blur for preblur.";
+> = true;
+
+uniform float crt_preblur_bilateral <
+    ui_type     = "drag"; ui_label = "Edge Preservation (Bilateral)";
+    ui_category = "Pre-Blur";
+    ui_tooltip  = "Bilateral filter strength: preserves edges while smoothing flat areas.\n"
+                  "Range weight uses a fixed luma threshold (0.1) -- samples differing\n"
+                  "by more than this from the centre pixel are progressively excluded.\n"
+                  "This value blends between pure Gaussian (0.0) and full bilateral (1.0).\n"
+                  "\n"
+                  "0.0 = disabled, standard Gaussian blur (default).\n"
+                  "0.3-0.5 = gentle edge preservation.\n"
+                  "0.7-1.0 = strong edge preservation, only flat areas blurred.\n"
+                  "\n"
+                  "Combines with Luma-Only for most accurate edge detection.\n"
+                  "Cost: ~2x Gaussian at same radius.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 0.0;
+
 #endif // ENABLE_PREBLUR
 
 // ============================================================
@@ -2494,7 +2522,7 @@ float3 soop_srgb_to_linear(float3 x)
 }
 float3 soop_linear_to_srgb(float3 x)
 {
-    return x < 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+    return x < 0.0031308 ? 12.92 * x : 1.055 * pow(max(x, 0.0), 1.0 / 2.4) - 0.055;
 }
 
 // scRGB Reinhard forward (Before pass)
@@ -2838,12 +2866,31 @@ float3 apply_bcs(float3 c, float brightness, float contrast, float saturation)
 #endif
 }
 
+// YCbCr helpers for luma-only preblur
+// BT.601 coefficients -- perceptually correct for CRT content
+float3 crt_rgb_to_ycbcr(float3 rgb)
+{
+    float Y  =  0.2990 * rgb.r + 0.5870 * rgb.g + 0.1140 * rgb.b;
+    float Cb = -0.1687 * rgb.r - 0.3313 * rgb.g + 0.5000 * rgb.b;
+    float Cr =  0.5000 * rgb.r - 0.4187 * rgb.g - 0.0813 * rgb.b;
+    return float3(Y, Cb, Cr);
+}
+
+float3 crt_ycbcr_to_rgb(float3 ycbcr)
+{
+    float Y = ycbcr.x, Cb = ycbcr.y, Cr = ycbcr.z;
+    return float3(
+        Y                + 1.4020 * Cr,
+        Y - 0.3441 * Cb  - 0.7141 * Cr,
+        Y + 1.7720 * Cb);
+}
+
 // ============================================================
 // Gamma helpers
 // ============================================================
 
 float3 to_linear(float3 x)   { return x < 0.04045 ? x/12.92 : pow((x+0.055)/1.055, 2.4); }
-float3 from_linear(float3 x) { return x < 0.0031308 ? 12.92*x : 1.055*pow(x,1.0/2.4)-0.055; }
+float3 from_linear(float3 x) { return x < 0.0031308 ? 12.92*x : 1.055*pow(max(x,0.0),1.0/2.4)-0.055; }
 float3 crt_to_linear(float3 x)   { return pow(max(x, 0.0), crt_gamma_in); }
 float3 crt_from_linear(float3 x) { return pow(max(x, 0.0), 1.0/crt_gamma_out); }
 
@@ -3282,19 +3329,43 @@ void crt_preblur_h_PS(
     float  px     = ReShade::PixelSize.x;
     int    radius = int(crt_preblur_h_radius);
 
-    for (int i = -radius; i <= radius; i++)
+    float3 centre_h   = geom_sample_lanczos2(ReShade::BackBuffer, texcoord_w);
+    float3 centre_ycc = crt_rgb_to_ycbcr(centre_h);
+    float  centre_Y   = centre_ycc.x;
+    if (crt_preblur_luma_only)
     {
-        // Use Lanczos2 only at centre (i==0) -- offset taps use bilinear since
-        // the warp gradient is small across one pixel at preblur scale
-        float3 s = (i == 0)
-            ? geom_sample_lanczos2(ReShade::BackBuffer, texcoord_w)
-            : tex2D(ReShade::BackBuffer, texcoord_w + float2(float(i)*px, 0.0)).rgb;
-        float  w = gauss(float(i), crt_preblur_h_sigma);
-        result  += s * w;
-        wsum    += w;
+        // Blur Y channel only -- chroma from centre pixel preserved
+        // Optional bilateral range weight on luma difference -- preserves edges
+        float  y_result = 0.0;
+        for (int i = -radius; i <= radius; i++)
+        {
+            float3 s   = (i == 0) ? centre_h
+                : tex2D(ReShade::BackBuffer, texcoord_w + float2(float(i)*px, 0.0)).rgb;
+            float  sY  = crt_rgb_to_ycbcr(s).x;
+            float  ws  = gauss(float(i), crt_preblur_h_sigma);
+            float  wr  = lerp(1.0, gauss(sY - centre_Y, 0.10), crt_preblur_bilateral);
+            float  w   = ws * wr;
+            y_result  += sY * w;
+            wsum      += w;
+        }
+        color = float4(crt_ycbcr_to_rgb(float3(y_result / max(wsum, 1e-5),
+                                                centre_ycc.y, centre_ycc.z)), 1.0);
     }
-
-    color = float4(result / max(wsum, 1e-5), 1.0);
+    else
+    {
+        for (int i = -radius; i <= radius; i++)
+        {
+            float3 s   = (i == 0) ? centre_h
+                : tex2D(ReShade::BackBuffer, texcoord_w + float2(float(i)*px, 0.0)).rgb;
+            float  sY  = crt_rgb_to_ycbcr(s).x;
+            float  ws  = gauss(float(i), crt_preblur_h_sigma);
+            float  wr  = lerp(1.0, gauss(sY - centre_Y, 0.10), crt_preblur_bilateral);
+            float  w   = ws * wr;
+            result    += s * w;
+            wsum      += w;
+        }
+        color = float4(result / max(wsum, 1e-5), 1.0);
+    }
 }
 #endif
 
@@ -3321,15 +3392,40 @@ void crt_preblur_v_PS(
     float  py     = ReShade::PixelSize.y * float(PREBLUR_RESOLUTION);
     int    radius = int(crt_preblur_v_radius);
 
-    for (int j = -radius; j <= radius; j++)
+    float3 centre_v   = tex2D(crt_preblur_h_sampler, texcoord).rgb;
+    float3 centre_ycc_v = crt_rgb_to_ycbcr(centre_v);
+    float  centre_Yv  = centre_ycc_v.x;
+    if (crt_preblur_luma_only)
     {
-        float3 s = tex2D(crt_preblur_h_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
-        float  w = gauss(float(j), crt_preblur_v_sigma);
-        result  += s * w;
-        wsum    += w;
+        // Blur Y channel only -- bilateral range weight optional
+        float  y_result = 0.0;
+        for (int j = -radius; j <= radius; j++)
+        {
+            float3 s   = tex2D(crt_preblur_h_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
+            float  sY  = crt_rgb_to_ycbcr(s).x;
+            float  ws  = gauss(float(j), crt_preblur_v_sigma);
+            float  wr  = lerp(1.0, gauss(sY - centre_Yv, 0.10), crt_preblur_bilateral);
+            float  w   = ws * wr;
+            y_result  += sY * w;
+            wsum      += w;
+        }
+        color = float4(crt_ycbcr_to_rgb(float3(y_result / max(wsum, 1e-5),
+                                                centre_ycc_v.y, centre_ycc_v.z)), 1.0);
     }
-
-    color = float4(result / max(wsum, 1e-5), 1.0);
+    else
+    {
+        for (int j = -radius; j <= radius; j++)
+        {
+            float3 s   = tex2D(crt_preblur_h_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
+            float  sY  = crt_rgb_to_ycbcr(s).x;
+            float  ws  = gauss(float(j), crt_preblur_v_sigma);
+            float  wr  = lerp(1.0, gauss(sY - centre_Yv, 0.10), crt_preblur_bilateral);
+            float  w   = ws * wr;
+            result    += s * w;
+            wsum      += w;
+        }
+        color = float4(result / max(wsum, 1e-5), 1.0);
+    }
 }
 #endif
 

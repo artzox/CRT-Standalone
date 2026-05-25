@@ -523,6 +523,10 @@ The shader includes several preprocessor defines to trade quality for performanc
 
 ## Troubleshooting
 
+### Temporal Shimmer on Detailed Textures (Gravel, Fabric)
+
+If fine textures shimmer or alias against the scanline pattern during camera movement, enable `ENABLE_PREBLUR=1` and increase `Pre-Blur Vertical Sigma` (0.3–0.8). Enable **Luma-Only Blur** (default on) to preserve colour saturation. Use **Edge Preservation (Bilateral)** (0.3–0.7) to limit blur to flat areas while keeping object edges sharp. This targets temporal aliasing between high-frequency texture and the scanline grid without softening the overall image.
+
 ### Image Degradation or Aliasing on Glow
 
 If you notice aliasing, shimmering, or reduced quality on the glow/halation output, try setting `GLOW_RESOLUTION=1` in the preprocessor definitions. This switches the glow textures to full resolution instead of the default half resolution, which eliminates the quality loss. Expect a moderate performance penalty — the glow passes will cost more GPU time at full resolution.

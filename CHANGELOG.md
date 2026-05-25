@@ -8,6 +8,15 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.4] — 2025-05
+
+### New Features
+
+- **Luma-Only Pre-Blur** (`crt_preblur_luma_only`, default on) — pre-blur now operates on the luma (Y) channel only using BT.601 YCbCr conversion. Chroma passes through unblurred, preserving colour saturation and accuracy. Strictly better than full RGB blur for the pre-blur use case; default enabled. Applies to both H and V passes independently
+- **Edge-Preserving Bilateral Filter** (`crt_preblur_bilateral`, default 0.0) — adds a range weight to the pre-blur Gaussian kernel. Samples differing from the centre pixel by more than ~10% luma are progressively excluded, preserving edges while smoothing flat texture areas. Formula: `lerp(1.0, gauss(luma_diff, 0.10), strength)` — monotonically increasing edge preservation from 0→1 with no reversal artifacts. Combines with luma-only for most accurate edge detection. Cost ~2× Gaussian at same radius
+
+---
+
 ## [1.1.3] — 2025-05
 
 ### Bug Fixes

@@ -523,6 +523,14 @@ The shader includes several preprocessor defines to trade quality for performanc
 
 ## Troubleshooting
 
+### Film Grain Emulsion Mode
+
+Enable `crt_grain_emulsion` for Voronoi-based grain that creates genuine silver halide cluster shapes rather than Gaussian noise blobs. Per-channel grain sizes match the physical emulsion layer stack (blue coarsest, red finest). Use `crt_grain_size` to tune blob scale — start small as emulsion blobs are larger in appearance than Gaussian grain at the same setting.
+
+### Diagonal Edge Stairstepping (Scanlines Crossing Diagonal Edges)
+
+The scanline pattern creates stairstepping where it intersects diagonal edges in the game geometry. Enable `ENABLE_SCANLINE_SOFTEN=1` (default on) and raise `Scanline Soften Strength` to 0.4–0.8. Then set `Diagonal Edge Threshold` to 0.02–0.05 to limit the softening to diagonal edge regions only, preserving sharpness on horizontal and vertical content. Threshold above 0.05 may produce shimmering on fast-moving diagonal edges.
+
 ### Temporal Shimmer on Detailed Textures (Gravel, Fabric)
 
 If fine textures shimmer or alias against the scanline pattern during camera movement, enable `ENABLE_PREBLUR=1` and increase `Pre-Blur Vertical Sigma` (0.3–0.8). Enable **Luma-Only Blur** (default on) to preserve colour saturation. Use **Edge Preservation (Bilateral)** (0.3–0.7) to limit blur to flat areas while keeping object edges sharp. This targets temporal aliasing between high-frequency texture and the scanline grid without softening the overall image.

@@ -8,6 +8,20 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.6] — 2025-05
+
+### New Features
+
+- **Diagonal edge-aware scanline softening** (`crt_soften_edge_threshold`, default 0.0) — the post-scanline soften pass now includes optional diagonal edge detection. Detects where scanlines cross diagonal game edges by measuring vertical gradient asymmetry between left and right neighbours — when a scanline crosses a diagonal, the vertical brightness pattern shifts horizontally, creating asymmetry that flat horizontal scanlines don't produce. Effective on dark low-contrast edges where colour gradient detection fails. Recommended range: 0.02–0.05. Above 0.05 may produce shimmering on fast-moving diagonal edges. Default 0.0 preserves original uniform softening behaviour
+
+- **Per-scanline brightness variation improvements** — replaced sine wave implementation with per-row hash (`crt_row_hash`) giving independent per-row variation with short-range spatial correlation (50% current row, 25% each neighbour). Eliminates the long-period banding of the sine approach. Added `crt_scanline_roll_drift` uniform for slow temporal drift of the pattern (default 0.0). Beam sigma now also modulated by roll value at half strength — brighter rows appear slightly wider, dimmer rows slightly narrower, matching real HV ripple behaviour
+
+### Bug Fixes
+
+- **Scanline roll `grain_uhash` compile error** — `crt_scanline_roll` was calling `grain_uhash` which is only defined inside `ENABLE_GRAIN`. Replaced with standalone `crt_row_hash` function defined unconditionally
+
+---
+
 ## [1.1.5] — 2025-05
 
 ### New Features

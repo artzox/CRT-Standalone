@@ -419,12 +419,29 @@ uniform float crt_composite_luma_sharpen <
 uniform float crt_soften_strength <
     ui_type = "drag"; ui_label = "Scanline Soften Strength";
     ui_category = "Post-Scanline Softening";
-    ui_tooltip = "Subtle vertical gaussian applied after scanlines to smooth\n"
-                 "staircase aliasing where curved geometry crosses scanline gaps.\n"
+    ui_tooltip = "Vertical blur applied after scanlines to smooth staircase aliasing\n"
+                 "on diagonal edges. Now edge-aware: only fires on pixels with\n"
+                 "significant horizontal gradient (diagonal edges), leaving horizontal\n"
+                 "scanline gaps untouched.\n"
                  "Keep low -- 0.3-0.6 is enough. Higher loses scanline definition.\n"
                  "Set ENABLE_SCANLINE_SOFTEN=0 to remove pass entirely.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.4;
+
+uniform float crt_soften_edge_threshold <
+    ui_type = "drag"; ui_label = "Diagonal Edge Threshold";
+    ui_category = "Post-Scanline Softening";
+    ui_tooltip = "Diagonal scanline-crossing detection threshold.\n"
+                 "Detects where scanlines cross diagonal edges by measuring\n"
+                 "vertical gradient asymmetry between left and right neighbours.\n"
+                 "Effective even on dark low-contrast edges.\n"
+                 "\n"
+                 "0.0 = no threshold, softens all pixels (default, old behaviour).\n"
+                 "0.02-0.05 = recommended: catches diagonal crossings without\n"
+                 "            shimmering on moving edges.\n"
+                 "Above 0.05 = may shimmer on fast-moving diagonal edges.";
+    ui_min = 0.0; ui_max = 0.3; ui_step = 0.005;
+> = 0.0;
 #endif
 
 // ============================================================
@@ -780,6 +797,18 @@ uniform float crt_scanline_roll_strength <
                  "Only visible on large uniform image areas. Invisible during\n"
                  "normal gameplay where image content dominates.";
     ui_min = 0.0; ui_max = 0.15; ui_step = 0.005;
+> = 0.0;
+
+uniform float crt_scanline_roll_drift <
+    ui_type     = "drag"; ui_label = "Scanline Row Variation Drift";
+    ui_category = "Scanlines";
+    ui_tooltip  = "Slow temporal drift of the per-row brightness pattern.\n"
+                  "Simulates the slight frequency component of real HV supply ripple\n"
+                  "-- the pattern is stable but slowly shifts over time.\n"
+                  "0.0 = static pattern (default).\n"
+                  "0.1-0.3 = very slow drift, barely perceptible.\n"
+                  "1.0 = noticeable slow drift over several seconds.";
+    ui_min = 0.0; ui_max = 2.0; ui_step = 0.05;
 > = 0.0;
 
 uniform float crt_beam_min_sigma <
@@ -2938,14 +2967,33 @@ float gauss_integral(float f, float hw, float sigma)
 // Per-scanline brightness variation.
 // Spatially correlated low-frequency hash -- adjacent rows similar, not random.
 // Models HV supply ripple + phosphor coating unevenness in real CRTs.
+// Standalone integer hash -- used by crt_scanline_roll independently of ENABLE_GRAIN
+uint crt_row_hash(uint x)
+{
+    x ^= x >> 16u;
+    x *= 0x45D9F3Bu;
+    x ^= x >> 16u;
+    return x;
+}
+
 float crt_scanline_roll(float row)
 {
-    // Two overlapping sine waves at incommensurable frequencies
-    // driven by row index -- deterministic, stable, spatially correlated
+    // Per-row hash with slight spatial correlation to adjacent rows.
+    // Models real CRT HV supply ripple -- each scanline independently varies,
+    // with neighbours similar but not identical (short-range correlation).
+    // Much higher frequency than sine waves -- matches actual tube behaviour.
     float r = floor(row);
-    float s1 = sin(r * 0.3731 + 1.4142) * 0.6;
-    float s2 = sin(r * 0.1171 + 2.7183) * 0.4;
-    return s1 + s2; // range approx [-1, 1]
+
+    uint  seed0 = crt_row_hash(uint(r));
+    uint  seed1 = crt_row_hash(uint(r + 1.0));
+    uint  seedm = crt_row_hash(uint(r - 1.0));
+
+    float v0 = float(seed0 & 0xFFFFu) / 32767.5 - 1.0;
+    float v1 = float(seed1 & 0xFFFFu) / 32767.5 - 1.0;
+    float vm = float(seedm & 0xFFFFu) / 32767.5 - 1.0;
+
+    // Weighted average: 50% current row, 25% each neighbour
+    return v0 * 0.5 + (v1 + vm) * 0.25;
 }
 
 // ============================================================
@@ -4108,27 +4156,32 @@ void crt_main_PS(
     float da = abs(f - hw) * 2.0;
     float db = abs(f + hw) * 2.0;
 
-    // Per-scanline brightness variation: spatially correlated low-frequency
-    // variation between rows simulating HV ripple and phosphor unevenness.
-    // Applied as a multiplicative factor on the lit scanline peak brightness.
-    // Only affects the bright portion (beam peak), not the dark gaps.
+    // Per-scanline variation: brightness AND sigma (beam width) vary per row.
+    // On a real CRT, HV ripple affects both beam focus and brightness --
+    // brighter rows are also slightly wider, dimmer rows slightly narrower.
+    // roll_raw is in [-1,1]; roll scales brightness, sigma_roll scales width.
     float scanline_row = floor(scanline_y / scan_width);
-    float roll = (crt_scanline_roll_strength > 0.0001)
-               ? 1.0 + crt_scanline_roll_strength * crt_scanline_roll(scanline_row)
-               : 1.0;
+    float roll_raw = (crt_scanline_roll_strength > 0.0001)
+                   ? crt_scanline_roll(scanline_row
+                       + floor(CRT_TIMER * 0.001 * crt_scanline_roll_drift))
+                   : 0.0;
+    float roll       = 1.0 + crt_scanline_roll_strength * roll_raw;
+    // Sigma modulation: wider when brighter, narrower when dimmer
+    // Scale is half of brightness variation so it doesn't dominate
+    float sigma_roll = 1.0 + crt_scanline_roll_strength * roll_raw * 0.5;
 
     #if ENABLE_BEAM_MODULATION
         float sigma_scale = 1.0 / max(scan_width, 1.0);
-        float r_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.r)) * sigma_scale;
-        float g_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.g)) * sigma_scale;
-        float b_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.b)) * sigma_scale;
+        float r_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.r)) * sigma_scale * sigma_roll;
+        float g_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.g)) * sigma_scale * sigma_roll;
+        float b_sigma = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(c_lin.b)) * sigma_scale * sigma_roll;
         // Analytical Gaussian integral -- no stairstepping
         float beam_r = gauss_integral(f, hw, r_sigma) * roll;
         float beam_g = gauss_integral(f, hw, g_sigma) * roll;
         float beam_b = gauss_integral(f, hw, b_sigma) * roll;
     #else
         // Analytical integral with megatron scanline shaping
-        float gi_s   = gauss_integral(f, hw, crt_scanline_sigma) * roll;
+        float gi_s   = gauss_integral(f, hw, crt_scanline_sigma * sigma_roll) * roll;
         float bd     = abs(f) * 2.0;
         float beam_r = megatron_scanline(c_lin.r,bd,crt_r_scanline_min,crt_r_scanline_max,crt_r_scanline_attack) * gi_s;
         float beam_g = megatron_scanline(c_lin.g,bd,crt_g_scanline_min,crt_g_scanline_max,crt_g_scanline_attack) * gi_s;
@@ -4410,16 +4463,15 @@ void crt_grain_merged_PS(
         float  shadow_blend = lerp(crt_grain_shadows, 1.0, saturate(luma_g * 8.0));
         float3 cl_grained;
 
+        float  luma_e = dot(cl, float3(0.2126, 0.7152, 0.0722));
+
         if (crt_grain_emulsion)
         {
-            // Voronoi emulsion mode: genuine blob clusters with per-channel sizes
             uint   fsalt = crt_grain_animate ? FRAMECOUNT : 0u;
-            // Calibrated: base 0.25px so size=0 matches Gaussian sub-pixel radius.
-            // Range 0.25-1.25px across slider -- user can push higher via grain_size.
             float  cell_scale = 0.25 + crt_grain_size * 1.0;
-            float2 pos        = float2(p); // raw pixel coordinates
+            float2 pos        = float2(p);
             float3 gn_e  = grain_emulsion(pos, cell_scale,
-                                          fsalt, crt_grain_intensity, luma_g);
+                                          fsalt, crt_grain_intensity, luma_e);
             gn_e *= shadow_blend;
             cl_grained = grain_hdr(cl);
             cl_grained += gn_e;
@@ -4430,7 +4482,7 @@ void crt_grain_merged_PS(
             // Standard Gaussian grain (METEOR-style)
             float3 u3 = float3(grain_next2(rng), grain_next1(rng));
             float3 gn = grain_bm3(u3);
-            float  poisson_amp = grain_poisson_sigma(luma_g, crt_grain_intensity);
+            float  poisson_amp = grain_poisson_sigma(luma_e, crt_grain_intensity);
             poisson_amp *= shadow_blend;
 
             if (crt_grain_colour)
@@ -4596,31 +4648,80 @@ void crt_soften_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    float3 centre = tex2D(ReShade::BackBuffer, texcoord).rgb;
+
     if (crt_soften_strength < 0.001)
     {
-        color = tex2D(ReShade::BackBuffer, texcoord);
+        color = float4(centre, 1.0);
         return;
     }
-    float py    = ReShade::PixelSize.y;
+
+    float2 px = ReShade::PixelSize;
+
+    // Diagonal scanline-crossing detection.
+    // When a scanline crosses a diagonal edge, the vertical brightness pattern
+    // shifts horizontally -- left and right neighbours have their scanline
+    // dark/bright phase offset from the centre pixel.
+    // Detect this by comparing the VERTICAL gradient at left vs right neighbours:
+    // on a diagonal edge they differ; on a horizontal or flat area they match.
+    float3 c_up    = tex2D(ReShade::BackBuffer, texcoord - float2(0.0,   px.y)).rgb;
+    float3 c_dn    = tex2D(ReShade::BackBuffer, texcoord + float2(0.0,   px.y)).rgb;
+    float3 c_l     = tex2D(ReShade::BackBuffer, texcoord - float2(px.x,  0.0)).rgb;
+    float3 c_r     = tex2D(ReShade::BackBuffer, texcoord + float2(px.x,  0.0)).rgb;
+    float3 c_lu    = tex2D(ReShade::BackBuffer, texcoord - float2(px.x,  px.y)).rgb;
+    float3 c_ld    = tex2D(ReShade::BackBuffer, texcoord - float2(px.x, -px.y)).rgb;
+    float3 c_ru    = tex2D(ReShade::BackBuffer, texcoord + float2(px.x, -px.y)).rgb;
+    float3 c_rd    = tex2D(ReShade::BackBuffer, texcoord + float2(px.x,  px.y)).rgb;
+
+    // Vertical gradient at left and right columns
+    float v_grad_l = length(c_lu - c_ld);
+    float v_grad_r = length(c_ru - c_rd);
+    float v_grad_c = length(c_up - c_dn);
+
+    // Horizontal gradient
+    float h_grad   = length(c_r - c_l);
+
+    // Diagonal crossing signature:
+    // - left and right vertical gradients differ from centre (phase shifted)
+    // - horizontal gradient present (actual edge, not flat area)
+    // This fires on scanlines crossing diagonal edges but NOT on:
+    // - Flat horizontal scanlines (v_grad_l == v_grad_r == v_grad_c)
+    // - Vertical edges (h_grad strong but v_grads all match)
+    float v_asymmetry = abs(v_grad_l - v_grad_r);
+    float combined    = max(v_asymmetry, h_grad * 0.5);
+
+    // Edge mask
+    float edge_mask = (crt_soften_edge_threshold < 0.001)
+                    ? 1.0  // threshold=0: apply everywhere (old behaviour)
+                    : saturate((combined - crt_soften_edge_threshold)
+                             / max(crt_soften_edge_threshold, 0.001));
+    edge_mask = edge_mask * edge_mask;
+
+    if (edge_mask < 0.001)
+    {
+        color = float4(centre, 1.0);
+        return;
+    }
+
+    // 5-tap asymmetric vertical Gaussian -- only applied on diagonal edges
     float sigma = crt_soften_strength * 0.8;
+    float w0  = gauss(0.0,  sigma);
+    float w1  = gauss(1.0,  sigma);
+    float w2  = gauss(2.0,  sigma);
+    float w1d = gauss(0.8,  sigma);
+    float w2d = gauss(1.8,  sigma);
 
-    // 5-tap asymmetric vertical gaussian
-    // Slight downward bias matches CRT beam sweep direction
-    float w0 = gauss(0.0,  sigma);
-    float w1 = gauss(1.0,  sigma);
-    float w2 = gauss(2.0,  sigma);
-    float w1d = gauss(0.8, sigma); // slightly closer below
-    float w2d = gauss(1.8, sigma);
-
-    float3 c =
-        tex2D(ReShade::BackBuffer, texcoord + float2(0.0, -2.0*py)).rgb * w2  +
-        tex2D(ReShade::BackBuffer, texcoord + float2(0.0, -1.0*py)).rgb * w1  +
-        tex2D(ReShade::BackBuffer, texcoord).rgb                         * w0  +
-        tex2D(ReShade::BackBuffer, texcoord + float2(0.0,  1.0*py)).rgb * w1d +
-        tex2D(ReShade::BackBuffer, texcoord + float2(0.0,  2.0*py)).rgb * w2d;
-
+    float3 blurred =
+        tex2D(ReShade::BackBuffer, texcoord + float2(0.0, -2.0*px.y)).rgb * w2  +
+        tex2D(ReShade::BackBuffer, texcoord + float2(0.0, -1.0*px.y)).rgb * w1  +
+        centre                                                              * w0  +
+        tex2D(ReShade::BackBuffer, texcoord + float2(0.0,  1.0*px.y)).rgb * w1d +
+        tex2D(ReShade::BackBuffer, texcoord + float2(0.0,  2.0*px.y)).rgb * w2d;
     float wsum = w2 + w1 + w0 + w1d + w2d;
-    color = float4(c / wsum, 1.0);
+    blurred /= wsum;
+
+    // Blend: full blur on strong diagonal edges, original on flat/horizontal areas
+    color = float4(lerp(centre, blurred, edge_mask), 1.0);
 }
 #endif
 

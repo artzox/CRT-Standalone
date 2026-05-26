@@ -529,7 +529,7 @@ Enable `crt_grain_emulsion` for Voronoi-based grain that creates genuine silver 
 
 ### Diagonal Edge Stairstepping (Scanlines Crossing Diagonal Edges)
 
-The scanline pattern creates stairstepping where it intersects diagonal edges in the game geometry. Enable `ENABLE_SCANLINE_SOFTEN=1` (default on) and raise `Scanline Soften Strength` to 0.4–0.8. Then set `Diagonal Edge Threshold` to 0.02–0.05 to limit the softening to diagonal edge regions only, preserving sharpness on horizontal and vertical content. Threshold above 0.05 may produce shimmering on fast-moving diagonal edges.
+The scanline pattern creates stairstepping where it intersects diagonal edges in the game geometry. Enable `ENABLE_SCANLINE_SOFTEN=1` (default on) and raise `Scanline Soften Strength` to 0.3–0.6. This applies a subtle vertical blur that reduces the stairstepping at the cost of slight overall softness. There is no fully clean solution to post-scanline diagonal aliasing without a morphological AA pass.
 
 ### Temporal Shimmer on Detailed Textures (Gravel, Fabric)
 

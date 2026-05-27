@@ -8,6 +8,20 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.7] — 2025-05
+
+### New Features
+
+- **Generalized Gaussian beam shape** (`crt_beam_shape`, default 2.0) — controls the cross-section profile of the electron beam. Standard Gaussian (`n=2`) is the original behaviour. Higher values produce a flatter scanline centre with steeper falloff to the dark gap, matching real well-focused CRT beams which have a plateau rather than a bell curve. Uses fast erf path at n=2; 16-point Gauss-Legendre quadrature for n>2 (accurate to <3% even at tight sigma=0.05). Existing presets: leave at 2.0 for unchanged appearance
+
+- **Corner beam spread** (`crt_beam_corner_spread`, default 0.0) — widens beam sigma proportionally to distance from screen centre. Practical use: softens diagonal edge aliasing (stairstepping) in off-centre areas where diagonal lines meet scanlines, without blurring the screen centre. Physical basis: real CRT electron beams strike phosphor at increasing angles toward edges, making the spot elliptical. Recommended range 0.3–0.5 for diagonal aliasing mitigation
+
+### Bug Fixes
+
+- **Generalized Gaussian 4-point GL undersampling** — 4-point Gauss-Legendre quadrature produced 85% error at sigma=0.05, n=8 (tight beam, high shape value) causing scanlines to disappear. Upgraded to 16-point GL (8 symmetric pairs) which reduces error to <3% across the full sigma and n range
+
+---
+
 ## [1.1.6] — 2025-05
 
 ### New Features

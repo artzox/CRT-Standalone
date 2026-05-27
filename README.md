@@ -529,7 +529,11 @@ Enable `crt_grain_emulsion` for Voronoi-based grain that creates genuine silver 
 
 ### Diagonal Edge Stairstepping (Scanlines Crossing Diagonal Edges)
 
-The scanline pattern creates stairstepping where it intersects diagonal edges in the game geometry. Enable `ENABLE_SCANLINE_SOFTEN=1` (default on) and raise `Scanline Soften Strength` to 0.3–0.6. This applies a subtle vertical blur that reduces the stairstepping at the cost of slight overall softness. There is no fully clean solution to post-scanline diagonal aliasing without a morphological AA pass.
+The scanline pattern creates stairstepping where it intersects diagonal edges in the game geometry. Two approaches:
+
+**Corner Beam Spread** (`crt_beam_corner_spread`, 0.3–0.5) — the most effective option for off-centre diagonal edges. Widens the beam sigma toward screen edges, softening diagonal aliasing in the areas where it is typically worst without affecting the screen centre. Physically motivated — real CRT beams are less focused at screen edges.
+
+**Scanline Soften** (`ENABLE_SCANLINE_SOFTEN=1`, strength 0.3–0.6) — applies a subtle vertical blur across the whole image. Helps at the cost of slight overall softness. There is no fully clean solution to post-scanline diagonal aliasing without a morphological AA pass.
 
 ### Temporal Shimmer on Detailed Textures (Gravel, Fabric)
 

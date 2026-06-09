@@ -8,6 +8,20 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.8] — 2026-06
+
+### New Features
+
+- **Gamut expansion** (`ENABLE_GAMUT_EXPAND=1`) — expands Rec.709 chrominance toward Rec.2020 within the existing HDR container. Luminance is unchanged; only colour primaries are expanded. Three selectable methods via the **Expansion Method** dropdown in the UI:
+  - **Oklab** — simple perceptual chroma boost, no luminance weighting
+  - **ICtCp** (default, recommended) — Dolby/ITU broadcast standard. Luminance-weighted so bright content expands less than midtones, correct for HDR 709 content
+  - **darktable UCS 2022** — most accurate; accounts for Helmholtz-Kohlrausch effect (colourful colours appear brighter at the same chromaticity). Chroma normalised against perceptual Munsell dataset
+- Three sliders: **Expansion Strength** (0.15-0.25 recommended), **Neutral Protection** (protects near-grey intentional grades), **Skin Tone Protection** (1.0 = full protection recommended)
+- All three pipelines supported: Pipeline 0 (sRGB encode/decode), Pipeline 1 (scRGB direct linear), Pipeline 2 (PQ encode/decode)
+- Runs as a separate pass after SoopAfter so it operates on the final reconstructed HDR signal
+
+---
+
 ## [1.1.7] — 2025-05
 
 ### New Features

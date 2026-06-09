@@ -99,6 +99,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `ENABLE_LIGHT_WARP` | 0 | Lightweight barrel/pincushion distortion (only active when ENABLE_GEOMETRY=0) |
 | `ENABLE_INTERLACE` | 0 | Interlaced field simulation — alternates scanline fields each frame |
 | `ENABLE_CORNER_ROUND` | 0 | Rounded screen corners with optional bezel border shadow |
+| `ENABLE_GAMUT_EXPAND` | 0 | Gamut expansion — Rec.709 chrominance → Rec.2020 within existing HDR container |
 
 ### Resolution / Quality Defines
 
@@ -203,7 +204,7 @@ The Luma Gate type (mask 5) is luminance-weighted — bright pixels pass through
 - **Combined behaviour:** mid-grey pixels use the interpolated value between dark and bright sigma. Set both sliders to the same value for uniform beam width across all luminance levels. Set bright higher than dark to get the authentic CRT effect where bright content bleeds more into the gaps
 - **Spot Size / Overbrightness** — luminance-squared brightness boost on peak white content, simulating how a CRT electron beam spot physically grows at high current. Dark pixels unaffected, bright pixels progressively boosted. In HDR pipeline this lifts highlights above SDR ceiling. 0.1–0.3 = subtle, 0.5 = strong
 - **Beam Horizontal Bloom** — simulates electron beam horizontal spreading on very bright scanlines. On real CRTs, high-current beams (saturated whites) spread sideways due to space charge repulsion between electrons. Only active above ~70% luma, with full effect above 90%. 0.0 = off (default). 0.3–0.5 = subtle spreading on bright highlights
-- **Beam Shape (Generalized Gaussian)** — controls the cross-section profile of the electron beam. At 2.0 (default) uses a standard Gaussian — smooth bell curve. Higher values produce a flatter scanline centre with steeper falloff to the dark gap, matching real well-focused CRT beams. Physically, a well-focused Trinitron or shadow mask CRT has a plateau rather than a bell curve at the scanline centre. Range 2–8; existing presets leave at 2.0 for unchanged appearance
+- **Beam Shape (Generalized Gaussian)** — controls the cross-section profile of the electron beam. At 2.0 (default) uses a standard Gaussian — smooth bell curve. Higher values produce a flatter scanline centre with steeper falloff to the dark gap, matching real well-focused CRT beams. Physically, a well-focused Trinitron or shadow mask CRT has a plateau rather than a bell curve at the scanline centre. Range 2–8; existing presets leave at 2.0 for unchanged appearance. **Tip:** combining values of 6+ with halation produces focused, physically accurate glowing highlights — the concentrated flat-top energy gives halation a sharper source to spread from, closely matching the appearance of real CRT phosphor bloom on bright content
 - **Corner Beam Spread** — widens beam sigma proportionally to distance from screen centre. Practical use: softens diagonal edge stairstepping in off-centre areas without blurring the screen centre. Physical basis: real CRT beams strike phosphor at increasing angles toward screen edges, making the spot elliptical and less sharp. 0.3–0.5 recommended for diagonal aliasing mitigation. Works with or without ENABLE_GEOMETRY
 
 **Note on Scanline Width:** The shader snaps `crt_scanline_width` to the nearest integer internally. Non-integer values caused some pixel rows to sample at the bright scanline centre while neighbouring rows sampled at the dark edge, producing oscillating scanline sizes and inconsistent mask darkness as the width slider was moved. Integer-snapping ensures every N rows form one clean scanline period
@@ -362,6 +363,24 @@ Requires `ENABLE_COMPOSITE=1`. Processes luma and chroma independently, simulati
 - **Chroma Blur Width** — horizontal blur applied to colour channels only. Luma stays sharp while colours bleed. 1.0–2.0 = authentic composite look, 4.0+ = heavy RF degradation
 - **Chroma Phase Offset** — horizontal offset of colour channels relative to luma, simulating composite signal delay
 - **Luma Sharpness Boost** — compensating unsharp mask on luma only, giving crisp edges alongside soft colour bleed
+
+### Gamut Expansion
+
+Expands Rec.709 colour primaries toward Rec.2020 within the existing HDR container. Luminance is unchanged — only colour primaries are expanded. Designed for games that output HDR luminance but Rec.709 colours, which is the majority of HDR game content. Runs as a separate pass after SoopAfter on the final reconstructed HDR signal.
+
+Requires `ENABLE_GAMUT_EXPAND=1`.
+
+| Setting | Description |
+|---|---|
+| Expansion Strength | How far to push saturated colours toward Rec.2020. 0.15–0.25 recommended starting point. 0.3–0.5 = vivid but may affect intentional grade decisions |
+| Neutral Protection | Protects low-saturation near-grey colours from expansion. Preserves intentional desaturated grades. Default 0.15 |
+| Skin Tone Protection | Reduces expansion in skin tone hue range. Leave at 1.0 for most content |
+| Expansion Method | **Oklab** — simple perceptual chroma boost. **ICtCp** (recommended) — Dolby/ITU broadcast standard, luminance-weighted so bright content expands less than midtones. **darktable UCS 2022** — most accurate, accounts for Helmholtz-Kohlrausch effect |
+
+All three pipelines supported:
+- Pipeline 0: sRGB decode → expand → re-encode, stays within 0–1
+- Pipeline 1: scRGB direct linear expand, HDR values above 1.0 preserved
+- Pipeline 2: PQ decode → expand → PQ re-encode
 
 ### Post-Scanline Softening (Scanline Persistence)
 

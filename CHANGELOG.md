@@ -16,9 +16,14 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
   - **Oklab** — simple perceptual chroma boost, no luminance weighting
   - **ICtCp** (default, recommended) — Dolby/ITU broadcast standard. Luminance-weighted so bright content expands less than midtones, correct for HDR 709 content
   - **darktable UCS 2022** — most accurate; accounts for Helmholtz-Kohlrausch effect (colourful colours appear brighter at the same chromaticity). Chroma normalised against perceptual Munsell dataset
-- Three sliders: **Expansion Strength** (0.15-0.25 recommended), **Neutral Protection** (protects near-grey intentional grades), **Skin Tone Protection** (1.0 = full protection recommended)
+- Four sliders: **Expansion Strength** (0.15-0.25 recommended), **Neutral Protection** (protects near-grey intentional grades), **Skin Tone Protection** (1.0 = full protection recommended), **Chroma Ceiling** (prevents neon overshoot on already-saturated colours — never reduces below original game saturation)
 - All three pipelines supported: Pipeline 0 (sRGB encode/decode), Pipeline 1 (scRGB direct linear), Pipeline 2 (PQ encode/decode)
 - Runs as a separate pass after SoopAfter so it operates on the final reconstructed HDR signal
+
+### Bug Fixes
+
+- **Burn-in protection sliders implemented** — `Phase Shift Amplitude` and `Pixel Orbit Radius` were declared but never wired up (the implementation used hardcoded triad fractions and horizontal-only movement). Phase amplitude now controls the shift distance directly; orbit now traces a true 8-position 2D circle of the configured radius. All shifts are quantised to whole pixels, which guarantees zero brightness fluctuation at any mask strength (integer-pixel shifts relocate the identical set of sampled mask values)
+- **ICtCp gamut expansion nit scaling** — corrected from 100 to 80 nits (scRGB defines 1.0 = 80 nits SDR reference white), placing the luminance weighting curve at the correct position
 
 ---
 

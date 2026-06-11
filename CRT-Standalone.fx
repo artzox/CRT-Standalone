@@ -988,6 +988,21 @@ uniform int crt_gamut_expand_method <
                   "equal across all hue angles.";
     ui_items    = "Oklab\0ICtCp (recommended)\0darktable UCS 2022\0";
 > = 1;
+
+uniform float crt_gamut_expand_ceiling <
+    ui_type = "drag"; ui_label = "Chroma Ceiling";
+    ui_category = "Gamut Expansion";
+    ui_tooltip = "Limits how much expansion is applied to already-saturated colours.\n"
+                 "Never reduces saturation below the original game output --\n"
+                 "only prevents the expansion from going too far on vivid colours.\n"
+                 "\n"
+                 "0.0 = no ceiling, full expansion applied (default).\n"
+                 "0.3-0.5 = moderate -- neon colours reined in, muted colours\n"
+                 "          still get the full expansion benefit.\n"
+                 "1.0 = maximum -- expansion only lifts colours that were\n"
+                 "      already near-neutral, vivid colours unchanged.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
+> = 0.0;
 #endif // ENABLE_GAMUT_EXPAND
 
 // ============================================================
@@ -3970,27 +3985,32 @@ void crt_main_PS(
     // distributing wear. No brightness fluctuation possible at any mask strength.
 
     #if ENABLE_BURNIN_PHASE
-        // Phase: alternates between 0 and 0.5 triad widths on a slow timer.
-        // 0.5 triad = each phosphor swaps to its neighbour's position.
+        // Phase: alternates between 0 and crt_burnin_phase_amp pixels on a slow
+        // timer. Shift is rounded to WHOLE pixels: integer-pixel shifts relocate
+        // exactly the same set of sampled mask values, guaranteeing identical
+        // average brightness at any mask strength (no brightness fluctuation).
         float phase_ms      = crt_burnin_phase_period * 60000.0;
         float phase_steps_  = floor(crt_timer / phase_ms);
         float phase_toggle  = phase_steps_ - floor(phase_steps_ * 0.5) * 2.0; // 0 or 1
-        float tw_px_phase   = crt_triad_width * (float(BUFFER_WIDTH) / 3840.0);
-        float phase_h       = phase_toggle * tw_px_phase * 0.5;
+        float phase_h       = phase_toggle * round(crt_burnin_phase_amp
+                            * (float(BUFFER_WIDTH) / 3840.0)); // integer pixels
     #else
         float phase_h       = 0.0;
     #endif
 
     #if ENABLE_BURNIN_ORBIT
-        // Orbit: steps through 0, 1, 2, 3 quarter-triad positions on a slow timer.
-        // Full triad = 4 steps, each step = 0.25 triad width.
+        // Orbit: steps through 8 discrete positions on a circle of radius
+        // crt_burnin_orbit_radius pixels. Each position is rounded to WHOLE
+        // pixels (see phase note above -- guarantees zero brightness change).
+        // Discrete stepping avoids perceptible motion; each step holds one period.
         float orbit_ms      = crt_burnin_orbit_period * 60000.0;
         float orbit_steps_  = floor(crt_timer / orbit_ms);
-        float orbit_phase   = orbit_steps_ - floor(orbit_steps_ * 0.25) * 4.0; // 0,1,2,3
-        float tw_px_orbit   = crt_triad_width * (float(BUFFER_WIDTH) / 3840.0);
-        float orbit_h       = orbit_phase * tw_px_orbit * 0.25;
+        float orbit_idx     = orbit_steps_ - floor(orbit_steps_ * 0.125) * 8.0; // 0..7
+        float orbit_angle   = orbit_idx * 0.7853982; // 2pi/8
+        float orbit_r       = crt_burnin_orbit_radius * (float(BUFFER_WIDTH) / 3840.0);
+        float2 orbit_offs   = round(float2(cos(orbit_angle), sin(orbit_angle)) * orbit_r);
     #else
-        float orbit_h       = 0.0;
+        float2 orbit_offs   = float2(0.0, 0.0);
     #endif
 
 
@@ -4228,7 +4248,7 @@ void crt_main_PS(
         float2 tile_id  = floor(fc / 16.0);
         uint   tile_rng = grain_uhash(grain_uhash(uint(tile_id.y)) + uint(tile_id.x));
         float  dither_x = (float(tile_rng & 0xFFu) / 255.0 - 0.5) * crt_mask_dither;
-        float2 fc_mask = fc + float2(phase_h + orbit_h + dither_x, 0.0);
+        float2 fc_mask = fc + float2(phase_h + orbit_offs.x + dither_x, orbit_offs.y);
         float  mask_pixel_luma = dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722));
         float3 mask = crt_mask_apply(fc_mask, crt_triad_width, crt_mask_strength,
                                     crt_phosphor_sharpness, crt_phosphor_colour,
@@ -5686,8 +5706,10 @@ float3 crt_ictcp_to_linear(float3 ictcp)
 
 float3 crt_gamut_expand_ictcp(float3 lin, float strength, float neutral, float skin)
 {
-    // Normalise to 100 nit reference for ICtCp (expects nits, game signal ~0-1 = ~0-100 nit)
-    float3 ictcp = crt_linear_to_ictcp(lin * 100.0);
+    // Normalise to nits for ICtCp. scRGB defines 1.0 = 80 nits (SDR reference
+    // white), so 80 is the correct scale for Pipeline 1 and a reasonable
+    // assumption for Pipeline 0/2 linearised signals.
+    float3 ictcp = crt_linear_to_ictcp(lin * 80.0);
     float  I     = ictcp.x;
     float  ct    = ictcp.y;
     float  cp    = ictcp.z;
@@ -5712,7 +5734,7 @@ float3 crt_gamut_expand_ictcp(float3 lin, float strength, float neutral, float s
 
     float2 ctcp_dir = (chroma > 0.00001) ? float2(ct, cp) / chroma : float2(1.0, 0.0);
     float3 ictcp_exp = float3(I, ctcp_dir * new_chroma);
-    return max(crt_ictcp_to_linear(ictcp_exp) / 100.0, 0.0);
+    return max(crt_ictcp_to_linear(ictcp_exp) / 80.0, 0.0);
 }
 
 // ---- Method 2: darktable UCS 2022 -----------------------------------
@@ -5813,23 +5835,64 @@ float3 crt_gamut_expand_dtucs(float3 lin, float strength, float neutral, float s
 }
 
 // ---- Main expand function -- dispatches to selected method ----------
+// Apply chroma ceiling in Oklab space -- smooth exponential compressor.
+// Colours below ceiling pass through unchanged; colours above are asymptotically
+// compressed back toward ceiling without hard clipping or hue shifts.
+// crt_apply_chroma_ceiling: limits how much expansion is applied,
+// but NEVER reduces chroma below the original unexpanded value.
+// linear_orig = original pre-expansion colour (floor)
+// linear_expanded = post-expansion colour (to be clamped)
+float3 crt_apply_chroma_ceiling(float3 linear_orig, float3 linear_expanded, float ceiling)
+{
+    if (ceiling < 0.001) return linear_expanded; // 0 = no ceiling, passthrough
+
+    float3 lab_orig = crt_linear_to_oklab(linear_orig);
+    float3 lab_exp  = crt_linear_to_oklab(linear_expanded);
+
+    float chroma_orig = sqrt(lab_orig.y*lab_orig.y + lab_orig.z*lab_orig.z);
+    float chroma_exp  = sqrt(lab_exp.y*lab_exp.y   + lab_exp.z*lab_exp.z);
+
+    if (chroma_exp < 0.0001) return linear_expanded;
+
+    // Map ceiling [0,1] to a chroma threshold above the original
+    // At ceiling=0: threshold very high (no limiting)
+    // At ceiling=1: threshold = original chroma (no expansion at all)
+    // Range in between gives partial limiting
+    float threshold = lerp(chroma_orig + 0.35, chroma_orig, ceiling);
+    threshold = max(threshold, chroma_orig); // never below original
+
+    // Smooth compressor: values below threshold pass through, above are compressed
+    float chroma_limited = threshold * (1.0 - exp(-chroma_exp / max(threshold, 0.001)));
+    // Ensure output chroma never falls below original
+    chroma_limited = max(chroma_limited, chroma_orig);
+
+    float scale = chroma_limited / chroma_exp;
+    lab_exp.y *= scale;
+    lab_exp.z *= scale;
+
+    return max(crt_oklab_to_linear(lab_exp), 0.0);
+}
+
 float3 crt_gamut_expand(float3 linear_in)
 {
+    float3 result;
     if (crt_gamut_expand_method == 2)
-        return crt_gamut_expand_dtucs(linear_in,
-               crt_gamut_expand_strength,
-               crt_gamut_expand_neutral,
-               crt_gamut_expand_skin);
+        result = crt_gamut_expand_dtucs(linear_in,
+                 crt_gamut_expand_strength,
+                 crt_gamut_expand_neutral,
+                 crt_gamut_expand_skin);
     else if (crt_gamut_expand_method == 1)
-        return crt_gamut_expand_ictcp(linear_in,
-               crt_gamut_expand_strength,
-               crt_gamut_expand_neutral,
-               crt_gamut_expand_skin);
+        result = crt_gamut_expand_ictcp(linear_in,
+                 crt_gamut_expand_strength,
+                 crt_gamut_expand_neutral,
+                 crt_gamut_expand_skin);
     else
-        return crt_gamut_expand_oklab(linear_in,
-               crt_gamut_expand_strength,
-               crt_gamut_expand_neutral,
-               crt_gamut_expand_skin);
+        result = crt_gamut_expand_oklab(linear_in,
+                 crt_gamut_expand_strength,
+                 crt_gamut_expand_neutral,
+                 crt_gamut_expand_skin);
+
+    return crt_apply_chroma_ceiling(linear_in, result, crt_gamut_expand_ceiling);
 }
 
 void crt_gamut_expand_PS(

@@ -294,6 +294,30 @@
     #define ENABLE_GAMUT_EXPAND 0
 #endif
 
+// Scanline rotated-grid supersampling (RGSS 4x): anti-aliases the diagonal
+// staircase caused by content-modulated beam width interacting with discrete
+// scanline rows. Evaluates the beam envelope at 4 rotated-grid subpixel
+// positions and averages. Cost: 4 extra source taps + 4x beam evaluation
+// (cheap on the default erf path, heavier with beam shape != 2).
+#ifndef ENABLE_SCANLINE_SS
+    #define ENABLE_SCANLINE_SS 0
+#endif
+
+// Horizontal beam reconstruction -- analytic generalized-Gaussian integral of
+// the electron spot along the horizontal axis, the complement to the vertical
+// scanline beam. Unlike Beam Horizontal Bloom (a luma-gated cosmetic smear),
+// this reconstructs the true horizontal beam profile for ALL content, so thin
+// bright vertical lines get a physically correct footprint instead of a hard
+// bilinear edge. Cost: HBEAM_TAPS source fetches per pixel.
+#ifndef ENABLE_BEAM_H
+    #define ENABLE_BEAM_H 0
+#endif
+// Horizontal beam tap count (each side). 2 = 5-tap, 3 = 7-tap. 2 is plenty
+// for typical spot sizes; raise only for very wide horizontal sigma.
+#ifndef HBEAM_TAPS
+    #define HBEAM_TAPS 2
+#endif
+
 
 
 // Phosphor colour profile correction
@@ -686,6 +710,40 @@ uniform int crt_mask_offset_y <
 // Uniforms -- Scanlines
 // ============================================================
 
+#if ENABLE_SCANLINE_SS
+uniform float crt_scanline_ss_strength <
+    ui_type = "drag"; ui_label = "Scanline AA (RGSS 4x)";
+    ui_category = "Scanlines";
+    ui_tooltip = "Rotated-grid supersampling of the scanline beam envelope.\n"
+                 "Reduces diagonal staircase aliasing where image edges cross\n"
+                 "scanline rows, by averaging the beam weight over 4 subpixel\n"
+                 "positions within each pixel.\n"
+                 "\n"
+                 "0.0 = off (single evaluation, original behaviour).\n"
+                 "1.0 = fully supersampled beam envelope (recommended when on).\n"
+                 "Intermediate values blend between the two.";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 1.0;
+
+uniform float crt_scanline_ss_coherence <
+    ui_type = "drag"; ui_label = "Scanline AA Edge Gating";
+    ui_category = "Scanlines";
+    ui_tooltip = "Restricts the supersampling to coherent diagonal edges using a\n"
+                 "structure-tensor measure of local gradient alignment.\n"
+                 "\n"
+                 "A real edge has gradients all pointing the same way (high\n"
+                 "coherence); fine texture has gradients in many directions that\n"
+                 "cancel (low coherence). Gating by coherence means the AA can be\n"
+                 "raised to full strength to kill diagonal stairs WITHOUT blending\n"
+                 "texture detail, which is what causes the smeared look at high\n"
+                 "strength when this is off.\n"
+                 "\n"
+                 "0.0 = no gating (supersample everything -- may blur texture).\n"
+                 "1.0 = full gating (only coherent edges supersampled, recommended).";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 1.0;
+#endif
+
 uniform float crt_scanline_width <
     ui_type = "drag"; ui_label = "Scanline Width (pixels)";
     ui_category = "Scanlines";
@@ -773,6 +831,37 @@ uniform float crt_beam_h_bloom <
                  "Only applies to pixels above ~80% luma -- darker areas unaffected.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
 > = 0.0;
+
+#if ENABLE_BEAM_H
+uniform float crt_beam_h_sigma <
+    ui_type = "drag"; ui_label = "Horizontal Beam Width";
+    ui_category = "Scanlines";
+    ui_tooltip = "Width of the horizontal electron spot, as a fraction of one\n"
+                 "source pixel. This reconstructs the true horizontal beam\n"
+                 "profile (analytic generalized-Gaussian integral) for all\n"
+                 "content -- the complement to the vertical scanline beam.\n"
+                 "\n"
+                 "Unlike Beam Horizontal Bloom (a bright-only cosmetic smear),\n"
+                 "this shapes every pixel: thin bright vertical lines bloom\n"
+                 "correctly and hard horizontal transitions gain a natural\n"
+                 "spot footprint instead of a bilinear edge.\n"
+                 "\n"
+                 "0.3-0.4 = tight focused beam (sharp, subtle).\n"
+                 "0.5-0.7 = typical consumer CRT spot.\n"
+                 "0.8-1.2 = soft/defocused beam.\n"
+                 "Uses the same Beam Shape exponent as the vertical scanline.";
+    ui_min = 0.2; ui_max = 1.5; ui_step = 0.05;
+> = 0.5;
+
+uniform float crt_beam_h_strength <
+    ui_type = "drag"; ui_label = "Horizontal Beam Amount";
+    ui_category = "Scanlines";
+    ui_tooltip = "Blend between the original sharp source and the horizontally\n"
+                 "reconstructed beam. 1.0 = full reconstruction.\n"
+                 "0.0 = off (bypass, no cost saved -- use ENABLE_BEAM_H=0 for that).";
+    ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
+> = 1.0;
+#endif
 
 uniform float crt_scanline_roll_strength <
     ui_type = "drag"; ui_label = "Scanline Row Variation";
@@ -4106,6 +4195,49 @@ void crt_main_PS(
         tex2D(ReShade::BackBuffer, uv_b).b);
     #endif
 
+    // -- Horizontal beam reconstruction --
+    // Analytic generalized-Gaussian integral of the electron spot along the
+    // horizontal axis. Each neighbour tap is weighted by the integral of the
+    // beam profile over that tap's one-pixel footprint -- the same model as the
+    // vertical scanline beam (gen_gauss_integral), applied horizontally.
+    // Operates on the source signal in the same space as the main fetch.
+    #if ENABLE_BEAM_H
+    if (crt_beam_h_strength > 0.001)
+    {
+        float  hpx = ReShade::PixelSize.x;
+        // Base coordinate matches the main fetch path (warp/preblur aware)
+        #if (ENABLE_PREBLUR == 0) && ENABLE_GEOMETRY
+            float2 hb_base = geom_warp(texcoord);
+        #else
+            float2 hb_base = texcoord;
+        #endif
+
+        // Half-footprint of one pixel in the same units gen_gauss_integral uses
+        // (it integrates the profile over [f-hw, f+hw] with hw = 0.5 = half a
+        // pixel). Position f is measured in pixels from the centre tap.
+        const float hb_hw = 0.5;
+
+        float3 hb_acc = 0.0;
+        float  hb_wsum = 0.0;
+        [unroll] for (int hi = -HBEAM_TAPS; hi <= HBEAM_TAPS; hi++)
+        {
+            float fpos = float(hi); // pixels from centre
+            // Beam weight = integral of generalized Gaussian over this pixel
+            float w = gen_gauss_integral(fpos, hb_hw, crt_beam_h_sigma, crt_beam_shape);
+
+            #if ENABLE_PREBLUR
+            float3 s = tex2D(crt_preblur_v_sampler, hb_base + float2(fpos * hpx, 0.0)).rgb;
+            #else
+            float3 s = tex2D(ReShade::BackBuffer, hb_base + float2(fpos * hpx, 0.0)).rgb;
+            #endif
+            hb_acc  += max(s, 0.0) * w;
+            hb_wsum += w;
+        }
+        float3 hb_result = (hb_wsum > 1e-6) ? hb_acc / hb_wsum : c;
+        c = lerp(c, hb_result, crt_beam_h_strength);
+    }
+    #endif // ENABLE_BEAM_H
+
     // -- Composite video: chroma blur + luma sharpen on correct source --
     // Runs after source sampling so it operates on the actual current frame
     // with correct UV mapping (preblur/geometry/plain as appropriate).
@@ -4357,7 +4489,139 @@ void crt_main_PS(
         float beam_b = megatron_scanline(c_lin.b,bd,crt_b_scanline_min,crt_b_scanline_max,crt_b_scanline_attack) * gi_s;
     #endif
 
+    #if ENABLE_SCANLINE_SS
+    // -- Rotated-grid supersampling of the scanline image (RGSS 4x) --
+    // True supersampling: each tap contributes its own COLOUR weighted by the
+    // beam at its subpixel position. This softens the content edge itself
+    // across the pixel footprint, which is where the diagonal staircase lives
+    // (averaging beam weights alone does not move the colour edge).
+    // Taps replicate the grading chain (colour temp -> BCS -> linear) and the
+    // centre's mask factor is applied to the averaged result, matching the
+    // single-sample path.
+    // Effective SS amount, optionally gated by local gradient coherence so
+    // texture detail is left single-sampled while diagonal edges get full AA.
+    //
+    // Base sampling coordinate must match the main fetch path: with geometry
+    // warp on, the single-sample colour comes from geom_warp(texcoord), so the
+    // SS taps must read from the same warped position or the blend produces a
+    // double image that grows toward the corners (max warp displacement).
+    // With preblur on, the preblur texture is already warped so texcoord maps
+    // directly. Offsets are applied post-warp; the warp Jacobian is ~identity
+    // at subpixel scale so this is accurate for the RGSS jitter.
+    #if (ENABLE_PREBLUR == 0) && ENABLE_GEOMETRY
+        float2 ss_base = geom_warp(texcoord); // match warped main fetch
+    #else
+        float2 ss_base = texcoord;            // preblur tex already warped, or no warp
+    #endif
+
+    float ss_amount = crt_scanline_ss_strength;
+    if (crt_scanline_ss_strength > 0.001 && crt_scanline_ss_coherence > 0.001)
+    {
+        float2 spx = ReShade::PixelSize;
+        #if ENABLE_PREBLUR
+        #define CRT_SSL(dx, dy) dot(max(tex2D(crt_preblur_v_sampler, ss_base + float2(dx, dy) * spx).rgb, 0.0), float3(0.2126, 0.7152, 0.0722))
+        #else
+        #define CRT_SSL(dx, dy) dot(max(tex2D(ReShade::BackBuffer, ss_base + float2(dx, dy) * spx).rgb, 0.0), float3(0.2126, 0.7152, 0.0722))
+        #endif
+        float sl00 = CRT_SSL(-1.0,-1.0); float sl10 = CRT_SSL(0.0,-1.0); float sl20 = CRT_SSL(1.0,-1.0);
+        float sl01 = CRT_SSL(-1.0, 0.0);                                 float sl21 = CRT_SSL(1.0, 0.0);
+        float sl02 = CRT_SSL(-1.0, 1.0); float sl12 = CRT_SSL(0.0, 1.0); float sl22 = CRT_SSL(1.0, 1.0);
+        #undef CRT_SSL
+        // Four sub-gradients feed the structure tensor
+        float4 ssgx = float4(sl10-sl00, sl20-sl10, sl12-sl02, sl22-sl12);
+        float4 ssgy = float4(sl01-sl00, sl21-sl20, sl02-sl01, sl22-sl21);
+        float Jxx = dot(ssgx, ssgx);
+        float Jyy = dot(ssgy, ssgy);
+        float Jxy = dot(ssgx, ssgy);
+        float tr  = Jxx + Jyy;
+        float aniso = (tr > 1e-6)
+                    ? sqrt((Jxx - Jyy)*(Jxx - Jyy) + 4.0*Jxy*Jxy) / tr
+                    : 0.0;
+        // Coherent edge -> keep full SS; incoherent texture -> pull SS toward 0.
+        float edge = smoothstep(0.35, 0.75, aniso);
+        ss_amount = lerp(crt_scanline_ss_strength,
+                         crt_scanline_ss_strength * edge,
+                         crt_scanline_ss_coherence);
+    }
+
+    if (ss_amount > 0.001 && crt_scanline_strength > 0.001)
+    {
+        // Classic RGSS pattern: rotated so no two samples share a row/column
+        static const float2 rgss[4] = {
+            float2( 0.125,  0.375), float2( 0.375, -0.125),
+            float2(-0.125, -0.375), float2(-0.375,  0.125)
+        };
+
+        float3 ss_acc = 0.0;
+        [unroll] for (int si = 0; si < 4; si++)
+        {
+            // Source tap at subpixel offset, in the same (warped) space as the
+            // main fetch so the supersampled result aligns with the single sample.
+            float2 ss_uv = ss_base + rgss[si] * ReShade::PixelSize;
+            #if ENABLE_PREBLUR
+            float3 ss_c  = tex2D(crt_preblur_v_sampler, ss_uv).rgb;
+            #else
+            float3 ss_c  = tex2D(ReShade::BackBuffer, ss_uv).rgb;
+            #endif
+            ss_c = max(ss_c, 0.0);
+
+            // Replicate grading chain so taps match the centre signal
+            if (abs(crt_colour_temp) > 0.001)
+                ss_c = apply_colour_temp(ss_c, crt_colour_temp);
+            if (abs(crt_brightness)>0.001 || abs(crt_contrast)>0.001 || abs(crt_saturation)>0.001)
+            {
+                #if PIPELINE >= 1
+                float3 ss_bcs = to_linear(ss_c);
+                ss_bcs = apply_bcs(ss_bcs, crt_brightness, crt_contrast, crt_saturation);
+                ss_c   = from_linear(max(ss_bcs, 0.0));
+                #else
+                ss_c   = apply_bcs(ss_c, crt_brightness, crt_contrast, crt_saturation);
+                #endif
+            }
+            float3 ss_lin = crt_to_linear(ss_c);
+
+            // Vertical beam position at this sample's y offset
+            float ss_y  = floor(fc.y) + 0.5 + rgss[si].y;
+            float ss_f  = frac(ss_y / scan_width) - 0.5;
+
+            float3 ss_beam;
+            #if ENABLE_BEAM_MODULATION
+            float ss_rs = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(ss_lin.r)) * sigma_scale * sigma_roll * corner_sigma_scale;
+            float ss_gs = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(ss_lin.g)) * sigma_scale * sigma_roll * corner_sigma_scale;
+            float ss_bs = lerp(crt_beam_min_sigma, crt_beam_max_sigma, saturate(ss_lin.b)) * sigma_scale * sigma_roll * corner_sigma_scale;
+            ss_beam.r = gen_gauss_integral(ss_f, hw, ss_rs, crt_beam_shape) * roll;
+            ss_beam.g = gen_gauss_integral(ss_f, hw, ss_gs, crt_beam_shape) * roll;
+            ss_beam.b = gen_gauss_integral(ss_f, hw, ss_bs, crt_beam_shape) * roll;
+            #else
+            float ss_gi = gen_gauss_integral(ss_f, hw, crt_scanline_sigma * sigma_roll * corner_sigma_scale, crt_beam_shape) * roll;
+            float ss_bd = abs(ss_f) * 2.0;
+            ss_beam.r = megatron_scanline(ss_lin.r, ss_bd, crt_r_scanline_min, crt_r_scanline_max, crt_r_scanline_attack) * ss_gi;
+            ss_beam.g = megatron_scanline(ss_lin.g, ss_bd, crt_g_scanline_min, crt_g_scanline_max, crt_g_scanline_attack) * ss_gi;
+            ss_beam.b = megatron_scanline(ss_lin.b, ss_bd, crt_b_scanline_min, crt_b_scanline_max, crt_b_scanline_attack) * ss_gi;
+            #endif
+
+            // Colour x beam, with scanline strength applied per tap
+            ss_acc += ss_lin * lerp(1.0, ss_beam, crt_scanline_strength);
+        }
+        ss_acc *= 0.25;
+
+        // Apply the centre pixel's mask factor (matches single-sample path,
+        // where mask multiplies c_lin before the scanline block)
+        #if ENABLE_MASK
+        ss_acc = ss_acc * mask * crt_mask_boost;
+        #endif
+
+        // Blend: single-sample scanline result vs supersampled result
+        float3 c_single = c_lin * lerp(1.0, float3(beam_r, beam_g, beam_b), crt_scanline_strength);
+        c_lin = lerp(c_single, ss_acc, ss_amount);
+    }
+    else
+    {
+        c_lin *= lerp(1.0, float3(beam_r, beam_g, beam_b), crt_scanline_strength);
+    }
+    #else
     c_lin *= lerp(1.0, float3(beam_r, beam_g, beam_b), crt_scanline_strength);
+    #endif // ENABLE_SCANLINE_SS
 
     // -- Interlaced field blanking --
     // Alternate between odd and even scanline fields each frame, matching

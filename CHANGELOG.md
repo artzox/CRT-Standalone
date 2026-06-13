@@ -8,6 +8,19 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.1.9] — 2026-06
+
+### New Features
+
+- **Horizontal beam reconstruction** (`ENABLE_BEAM_H=1`) — analytic generalized-Gaussian integral of the electron spot along the horizontal axis, the complement to the vertical scanline beam. Each output pixel integrates the source across `HBEAM_TAPS` neighbours weighted by the beam profile over each tap's pixel footprint, using the same model and Beam Shape exponent as the vertical scanline. Unlike Beam Horizontal Bloom (a luma-gated cosmetic smear on bright pixels), this reconstructs the true horizontal profile for all content: thin bright vertical lines bloom correctly and hard horizontal transitions gain a natural spot footprint instead of a bilinear edge. Two sliders: **Horizontal Beam Width** (spot width as a fraction of a source pixel) and **Horizontal Beam Amount** (blend vs sharp source). Warp- and preblur-aware. `HBEAM_TAPS` preprocessor controls tap count (2 = 5-tap default)
+- **Scanline AA edge gating** — the RGSS scanline supersampling can now be gated by local gradient coherence (structure-tensor anisotropy) via the **Scanline AA Edge Gating** slider. Coherent geometric edges receive the full supersampling while fine texture detail (gradients pointing in many directions) is left single-sampled. This lets Scanline AA run at full strength to remove diagonal stairs without the texture smearing that previously appeared at high strength. 1.0 = full gating (recommended), 0.0 = previous always-on behaviour
+
+### Bug Fixes
+
+- **Scanline AA geometry-warp alignment** — the scanline supersampling sampled the source at the unwarped coordinate while the main colour path (with `ENABLE_GEOMETRY=1`) samples at the warped coordinate. The mismatch produced a double image that grew toward the screen corners where warp displacement is largest. Both the coherence taps and the RGSS taps now sample from a base coordinate that matches the main fetch path (warped backbuffer under geometry, or the already-warped preblur texture)
+
+---
+
 ## [1.1.8] — 2026-06
 
 ### New Features

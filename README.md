@@ -114,7 +114,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `PREBLUR_FILTER` | 0 | Reconstruction filter for pre-blur and geometry warp sampling. 0=Lanczos2 (default, 4×4 taps), 1=Lanczos3 (6×6 taps, sharper, ~2× cost), 2=Catmull-Rom (4×4 taps, crispest edges at same cost as Lanczos2) |
 | `SCANLINE_REFERENCE_HEIGHT` | 0 | Resolution-independent scanline width. Set to your display's native vertical resolution (2160=4K, 2880=5K). When set, `crt_scanline_width` produces identical-looking scanlines at any render resolution. 0=disabled (default, preserves existing preset behaviour) |
 | `HBEAM_TAPS` | 2 | Horizontal beam reconstruction tap count per side (requires `ENABLE_BEAM_H=1`). 2 = 5-tap (default, plenty for typical spot sizes), 3 = 7-tap for very wide horizontal beams |
-| `DECAY_BB_INTEGRAL` | 0 | Blur Busters overlap-integral mode for Variable MPRT + Tube Position (240Hz+). Allocates two extra full-resolution history textures written every frame. Leave at 0 for standard BFI / Fibonacci / dark-blend — those write a single history texture per frame. Only enable if you use Decay Method = Variable MPRT with Tube Position on |
+| `DECAY_BB_INTEGRAL` | 0 | Enables the Blur Busters overlap-integral path, which is required **only** by the **Tube Position (raster sweep)** option under Variable MPRT (a 240Hz+ feature). Allocates two extra full-resolution history textures written every frame. Leave at 0 for everything else — standard BFI, Fibonacci, dark-blend, and Variable MPRT *without* Tube Position all write a single history texture per frame. With this at 0, the Tube Position toggle falls back to standard lit/dark BFI |
 
 ### HDR / Pipeline
 
@@ -505,6 +505,8 @@ Hardware BFI turns the backlight off between frames — the pixel values are unc
 ### Experimental BFI Options
 
 **Invert Cycle** — for 240Hz+ only. Inverts the lit/dark ratio: instead of 1 lit + N-1 dark frames, uses N-1 lit + 1 dark. Maintains higher average brightness while retaining some clarity benefit from the single dark frame. At 120Hz causes visible pulsing — do not use.
+
+**Tube Position (Variable MPRT raster sweep)** — for 240Hz+ only. Simulates the CRT beam sweeping top-to-bottom as a spatially-varying decay phase, using the Blur Busters overlap integral. **Requires the `DECAY_BB_INTEGRAL=1` preprocessor definition** (it allocates two extra history textures); with the define at 0 this toggle does nothing and falls back to standard lit/dark BFI. At 120Hz the sweep period equals the frame period so the gradient band appears frozen on screen — keep it **off** at 120Hz. Only meaningful at 240Hz+.
 
 **BFI Duty Ratio** — skips BFI every N cycles, replacing skipped cycles with passthrough. Reduces flicker at the cost of clarity. The 1:2 setting at 120Hz reduces the effective dark frame rate to 30Hz which may itself be visible as a rhythm.
 

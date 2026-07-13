@@ -114,6 +114,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `PREBLUR_FILTER` | 0 | Reconstruction filter for pre-blur and geometry warp sampling. 0=Lanczos2 (default, 4×4 taps), 1=Lanczos3 (6×6 taps, sharper, ~2× cost), 2=Catmull-Rom (4×4 taps, crispest edges at same cost as Lanczos2) |
 | `SCANLINE_REFERENCE_HEIGHT` | 0 | Resolution-independent scanline width. Set to your display's native vertical resolution (2160=4K, 2880=5K). When set, `crt_scanline_width` produces identical-looking scanlines at any render resolution. 0=disabled (default, preserves existing preset behaviour) |
 | `HBEAM_TAPS` | 2 | Horizontal beam reconstruction tap count per side (requires `ENABLE_BEAM_H=1`). 2 = 5-tap (default, plenty for typical spot sizes), 3 = 7-tap for very wide horizontal beams |
+| `DECAY_BB_INTEGRAL` | 0 | Blur Busters overlap-integral mode for Variable MPRT + Tube Position (240Hz+). Allocates two extra full-resolution history textures written every frame. Leave at 0 for standard BFI / Fibonacci / dark-blend — those write a single history texture per frame. Only enable if you use Decay Method = Variable MPRT with Tube Position on |
 
 ### HDR / Pipeline
 
@@ -620,8 +621,6 @@ Using Variable MPRT (Blur Busters method) with `PIPELINE=1` or `PIPELINE=2` caus
 ### BFI Desync in Some Games
 
 Some games (notably older UE4 titles) produce occasional frame timing anomalies that flip the BFI phase permanently, causing sustained heavy flicker. The Auto-Resync experimental option attempts to detect and correct this but may not work reliably in all cases. Reloading the shader (click the effect name in ReShade) resets FRAMECOUNT and resolves the desync.
-
----
 
 ## Quick Start Presets
 

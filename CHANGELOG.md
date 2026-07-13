@@ -8,6 +8,21 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.2.0] — 2026-06
+
+### Performance
+
+- **Decay history bandwidth reduction** — with `ENABLE_DECAY=1`, the standard BFI / Fibonacci / dark-blend methods now write a single full-resolution history texture per frame instead of three. The raw + prev2 history textures (read only by the Blur Busters overlap-integral path) are gated behind a new `DECAY_BB_INTEGRAL` preprocessor (default 0). For a typical 4K/120fps BFI preset this returns roughly two-thirds of the decay-path write bandwidth
+- **History format** — decay history textures now use `RGB10A2` on Pipeline 0 (lossless for the bounded SDR signal), halving the remaining history bandwidth there. Pipeline 1/2 keep `RGBA16F` for values that exceed 1.0
+- No visual change in any decay mode
+
+### Changes
+
+- Tube Position (Variable MPRT raster sweep) now requires `DECAY_BB_INTEGRAL=1`; without it the toggle falls back to standard lit/dark BFI. Documented in its tooltip
+- Duty-cycle skip flag is now derived from the same counter as the BFI phase (computed in the phase-store pass), so cycle boundaries stay aligned with phase boundaries
+
+---
+
 ## [1.1.9] — 2026-06
 
 ### New Features

@@ -237,6 +237,16 @@
     #define ENABLE_DECAY 0
 #endif
 
+// Blur Busters spatial overlap-integral mode (Variable MPRT with Tube Position
+// simulation, 240Hz+ only). Requires two extra full-resolution history textures
+// (raw + prev2) written every frame -- significant bandwidth. Disabled by
+// default: standard BFI, Fibonacci decay, dark blend, and motion sharpen all
+// work without it. Enable only if you use Decay Method = Variable MPRT with
+// Tube Position on.
+#ifndef DECAY_BB_INTEGRAL
+    #define DECAY_BB_INTEGRAL 0
+#endif
+
 // Anti Burn-In
 #ifndef ENABLE_BURNIN_PHASE
     #define ENABLE_BURNIN_PHASE 1
@@ -2232,7 +2242,11 @@ uniform bool crt_decay_tube_pos <
                  "semi-transparent band. This is not a bug; it is physics.\n"
                  "240Hz+: enable for a subtle authentic rolling gradient.\n"
                  "When disabled, tubePos is fixed at 0.5 (uniform, no artifact).\n"
-                 "Has no effect in BFI or Fibonacci.";
+                 "Has no effect in BFI or Fibonacci.\n"
+                 "\n"
+                 "REQUIRES the DECAY_BB_INTEGRAL=1 preprocessor definition, which\n"
+                 "allocates two extra full-resolution history textures. Without it\n"
+                 "this toggle falls back to standard lit/dark BFI.";
 > = false;
 #endif
 
@@ -2553,20 +2567,34 @@ sampler2D crt_decay_luma_dark_sampler     { Texture=crt_decay_luma_dark_tex;    
 sampler2D crt_decay_luma_lit_prev_samp    { Texture=crt_decay_luma_lit_prev_tex;  MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
 sampler2D crt_decay_luma_dark_prev_samp   { Texture=crt_decay_luma_dark_prev_tex; MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
 
-// Variable MPRT: two history frames for brightness budget
+// History format: Pipeline 0 backbuffer is bounded [0,1] so 10-bit is
+// lossless there; Pipeline 1/2 hold scRGB/PQ-derived values that can exceed
+// 1.0 and need half-float. Halves history bandwidth for SDR-pipeline users.
+#if PIPELINE == 0
+    #define CRT_DECAY_HIST_FORMAT RGB10A2
+#else
+    #define CRT_DECAY_HIST_FORMAT RGBA16F
+#endif
+
+// prev1: previous raw frame. Always needed when decay is on (dark blend,
+// motion sharpen, BB integral).
 texture2D crt_decay_prev1_tex < pooled = false; >
 {
     Width  = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
+    Format = CRT_DECAY_HIST_FORMAT;
 };
 sampler2D crt_decay_prev1_sampler { Texture = crt_decay_prev1_tex; };
 
+#if DECAY_BB_INTEGRAL
+// prev2 + raw: only read by the Blur Busters overlap-integral path
+// (Variable MPRT with Tube Position on). Gated to avoid two full-resolution
+// texture writes per frame for the standard BFI/Fibonacci methods.
 texture2D crt_decay_prev2_tex < pooled = false; >
 {
     Width  = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
+    Format = CRT_DECAY_HIST_FORMAT;
 };
 sampler2D crt_decay_prev2_sampler { Texture = crt_decay_prev2_tex; };
 // Raw game frame captured before decay runs -- used for clean history comparison.
@@ -2576,9 +2604,10 @@ texture2D crt_decay_raw_tex < pooled = false; >
 {
     Width  = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
+    Format = CRT_DECAY_HIST_FORMAT;
 };
 sampler2D crt_decay_raw_sampler { Texture = crt_decay_raw_tex; };
+#endif // DECAY_BB_INTEGRAL
 #endif
 
 #if ENABLE_PERSISTENCE
@@ -5490,7 +5519,18 @@ void crt_decay_phase_store_PS(
 
     int phase_offset = (crt_decay_fg_phase ? 1 : 0) + FRAMEGEN_PHASE_OFFSET + auto_offset;
     int idx          = (int(FRAMECOUNT) + phase_offset) % frames;
-    color            = float4(float(idx) / 255.0, 0.0, 0.0, 1.0);
+
+    // Duty-cycle skip flag, computed from the same counter as the phase so
+    // cycle boundaries stay aligned with phase boundaries. Stored in G for the
+    // decay PS to read.
+    float duty_active = 1.0;
+    if (crt_decay_duty_ratio > 0)
+    {
+        int cycle_idx = int(FRAMECOUNT) / frames;
+        duty_active   = ((cycle_idx % (crt_decay_duty_ratio + 1)) == 0) ? 1.0 : 0.0;
+    }
+
+    color = float4(float(idx) / 255.0, duty_active, 0.0, 1.0);
 }
 
 // Raw game frame store: captures backbuffer before decay modifies it.
@@ -5500,6 +5540,8 @@ void crt_decay_phase_store_PS(
 //   Target0 = crt_decay_raw_tex   (current backbuffer -- pre-decay raw frame)
 //   Target1 = crt_decay_prev1_tex (current backbuffer -- becomes prev1 next frame)
 // prev2 is updated separately since it reads from prev1 (last frame), not BackBuffer.
+#if DECAY_BB_INTEGRAL
+// BB integral mode: capture raw + prev1 in one dual-output pass.
 void crt_decay_store_PS(
     in  float4 position  : SV_Position,
     in  float2 texcoord  : TEXCOORD0,
@@ -5520,6 +5562,17 @@ void crt_decay_prev2_store_PS(
 {
     color = float4(tex2D(crt_decay_prev1_sampler, texcoord).rgb, 1.0);
 }
+#else
+// Standard mode: only prev1 is needed -- one full-res write per frame
+// (saves two full-res RGBA writes vs BB-integral mode).
+void crt_decay_store_PS(
+    in  float4 position  : SV_Position,
+    in  float2 texcoord  : TEXCOORD0,
+    out float4 out_prev1 : SV_Target)
+{
+    out_prev1 = float4(tex2D(ReShade::BackBuffer, texcoord).rgb, 1.0);
+}
+#endif // DECAY_BB_INTEGRAL
 
 
 
@@ -5552,12 +5605,10 @@ void crt_decay_PS(
     // When duty_ratio > 0: active on cycle % (duty_ratio+1) == 0, skip otherwise.
     // This is independent of frames-per-cycle -- the skip always spans one
     // complete cycle regardless of how many frames are in it.
-    bool cycle_active = true;
-    if (crt_decay_duty_ratio > 0)
-    {
-        int cycle_idx = int(FRAMECOUNT) / frames;
-        cycle_active  = (cycle_idx % (crt_decay_duty_ratio + 1)) == 0;
-    }
+    // Duty flag is computed in the phase-store pass from the same base counter
+    // as the phase itself (FRAMECOUNT or addon refresh count), so cycle
+    // boundaries always align with phase boundaries.
+    bool cycle_active = (crt_decay_duty_ratio <= 0) || (phase_data.g > 0.5);
 
     // Frametime spike detection: if this frame took significantly longer than expected,
     // output passthrough instead of BFI. A spike frame held on-screen for 2-5x the
@@ -5767,6 +5818,15 @@ void crt_decay_PS(
             }
             else
             {
+                #if !DECAY_BB_INTEGRAL
+                // Tube Position mode requires DECAY_BB_INTEGRAL=1 (extra history
+                // textures). Fall back to standard lit/dark BFI so output stays
+                // sensible; set the preprocessor to enable the overlap integral.
+                if (frame_in_cycle == 0)
+                    out_color = clamp(bb_linear2srgb(pixelCurr * brightnessScale), 0.0, 1.0);
+                else
+                    out_color = float3(crt_decay_dark_floor, crt_decay_dark_floor, crt_decay_dark_floor);
+                #else
                 // BB overlap integral -- only valid with spatially-varying tubePos.
                 float3 pixelPrev1 = bb_srgb2linear(tex2D(crt_decay_prev1_sampler, texcoord).rgb);
                 float3 pixelPrev2 = bb_srgb2linear(tex2D(crt_decay_prev2_sampler, texcoord).rgb);
@@ -5809,6 +5869,7 @@ void crt_decay_PS(
                 #undef BB_CH_FUNC
 
                 out_color = clamp(bb_linear2srgb(result), 0.0, 1.0);
+                #endif // DECAY_BB_INTEGRAL
             }
             #endif // PIPELINE >= 1 mismatch guard
     }
@@ -6704,8 +6765,9 @@ technique CRT_Standalone <
     }
     #endif
     #if ENABLE_DECAY
-    // Merged store: raw capture + prev1 update in one dual-output pass.
-    // Saves one full-resolution pass vs the original three separate passes.
+    // History store. BB-integral mode: raw+prev1 dual-output plus a prev2
+    // copy (3 full-res writes). Standard mode: prev1 only (1 write).
+    #if DECAY_BB_INTEGRAL
     pass PhosphorDecayStoreRawPrev1
     {
         VertexShader  = PostProcessVS;
@@ -6719,6 +6781,15 @@ technique CRT_Standalone <
         PixelShader  = crt_decay_prev2_store_PS;
         RenderTarget = crt_decay_prev2_tex;
     }
+    #else
+    // Standard mode: single prev1 write -- two fewer full-res writes per frame
+    pass PhosphorDecayStorePrev1
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_store_PS;
+        RenderTarget = crt_decay_prev1_tex;
+    }
+    #endif
     pass PhosphorDecayPhaseStore
     {
         VertexShader = PostProcessVS;

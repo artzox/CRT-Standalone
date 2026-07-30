@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.2.1] — 2026-06
+
+### Bug Fixes
+
+- **Interference effects now stack correctly with Scanline Jitter** — the H-sync, Wiggle, and Scanline Jitter sub-effects each re-sampled the backbuffer and overwrote the working colour, so enabling Scanline Jitter (positioned late in the chain) discarded every effect computed before it — Hum Bars, Wiggle, Modulation, Magnetic Interference, Dot Crawl, and Ghost all appeared to switch off. The interference pass has been restructured into two phases: the UV-displacement effects (H-sync, Wiggle, Jitter) now accumulate their offsets into a single fetch, and the colour-modifying effects (accumulate, magnetic, dot crawl, hum, rolling scanlines, ghost) are applied on top. All interference effects now compose in any combination. Affected DirectX and OpenGL equally
+
+---
+
 ## [1.2.0] — 2026-06
 
 ### Performance

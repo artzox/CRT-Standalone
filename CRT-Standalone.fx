@@ -6346,7 +6346,13 @@ void crt_noise_floor_PS(
 // ============================================================
 // Interference pass -- all signal-level effects as post-process
 // Applied to the final image after all CRT rendering is complete.
-// Effects in order: accumulate, wiggle, hum bars, rolling scanlines, ghost
+// Effects compose in two phases so they all stack:
+//   Phase 1 (UV displacement): H-sync, wiggle, scanline jitter -- offsets are
+//            summed into disp_uv and applied in a single fetch.
+//   Phase 2 (colour modification): accumulate, magnetic, dot crawl, hum bars,
+//            rolling scanlines, ghost -- applied on top of the fetched colour.
+// (Displacement effects previously each re-sampled the backbuffer and
+// overwrote the working colour, so an active jitter wiped out the others.)
 // ============================================================
 #if ENABLE_INTERFERENCE
 void crt_accum_store_PS(
@@ -6362,60 +6368,72 @@ void crt_interference_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    // -- Accumulate modulation (phosphor afterglow, NewPixie approach) --
-    // max(prev*modulate, current*0.96): bright content trails across frames.
-    float2 src_uv = texcoord;
-    if (crt_accum_modulate > 0.001)
-    {
-        float4 prev    = tex2D(crt_accum_samp, texcoord) * crt_accum_modulate;
-        float4 current = tex2D(ReShade::BackBuffer, texcoord) * 0.96;
-        color = max(prev, current);
-    }
-    else
-    {
-        color = tex2D(ReShade::BackBuffer, texcoord);
-    }
-
-    float3 c = color.rgb;
+    // ------------------------------------------------------------------
+    // Phase 1: accumulate UV displacement from all geometry-shifting
+    // effects (H-sync, wiggle, scanline jitter). These are pure UV shifts,
+    // so summing their offsets and doing ONE fetch lets them compose instead
+    // of each overwriting the previous by re-sampling the raw backbuffer.
+    // (Previously each did its own tex2D(BackBuffer,...) and clobbered c,
+    // which is why an active jitter appeared to disable the other effects.)
+    // ------------------------------------------------------------------
+    float2 disp_uv = 0.0;
 
     // -- H-sync instability: probabilistic per-row horizontal displacement --
-    // Fires on random rows with probability crt_hsync_rate per row per frame.
-    // Displacement magnitude varies per row. Stronger near top of screen.
     if (crt_hsync_strength > 0.001)
     {
-        uint row       = uint(texcoord.y * float(BUFFER_HEIGHT));
-        // Fast per-row per-frame hash -- changes every frame for probabilistic firing
+        uint row        = uint(texcoord.y * float(BUFFER_HEIGHT));
         uint hsync_seed = row * 3761u + FRAMECOUNT * 0x45D9F3Bu;
         float rand_val  = grain_unorm1(grain_uhash(hsync_seed));
-        // Fire if random value below rate threshold
         if (rand_val < crt_hsync_rate)
         {
-            // Displacement amount: second hash for magnitude + sign
             uint  mag_seed  = row * 9277u + FRAMECOUNT * 0x1B873593u;
             float disp      = (grain_unorm1(grain_uhash(mag_seed)) - 0.5) * 2.0;
-            // Slightly stronger near top (sync lock weaker at frame start)
             float top_bias  = 1.0 + (1.0 - texcoord.y) * 0.5;
-            // Resolution-scaled
             float hs_scale  = 1080.0 / float(BUFFER_WIDTH);
-            float2 hs_uv    = float2(texcoord.x + disp * crt_hsync_strength * top_bias * hs_scale,
-                                     texcoord.y);
-            c = tex2D(ReShade::BackBuffer, hs_uv).rgb;
+            disp_uv.x += disp * crt_hsync_strength * top_bias * hs_scale;
         }
     }
 
     // -- Wiggle: horizontal UV displacement (NewPixie triple-sine) --
-    // Post-process UV warp on the already-rendered image.
     if (crt_wiggle_strength > 0.0001)
     {
         float t_wig = (float(FRAMECOUNT) - 849.0*floor(float(FRAMECOUNT)/849.0)) * 36.0 * crt_wiggle_speed;
         float wig   = sin(0.1*t_wig  + texcoord.y*13.0)
                     * sin(0.23*t_wig + texcoord.y*19.0)
                     * sin(0.3 + 0.11*t_wig + texcoord.y*23.0);
-        // Scale by reference resolution: same strength = same pixel displacement at any res
         float wig_scale = 1080.0 / float(BUFFER_HEIGHT);
-        float2 warp_uv = float2(texcoord.x + wig * crt_wiggle_strength * wig_scale, texcoord.y);
-        c = tex2D(ReShade::BackBuffer, warp_uv).rgb;
+        disp_uv.x += wig * crt_wiggle_strength * wig_scale;
     }
+
+    // -- Scanline jitter: per-scanline vertical displacement --
+    if (crt_scanline_jitter > 0.001)
+    {
+        uint row      = uint(texcoord.y * float(BUFFER_HEIGHT));
+        uint t_slow   = (FRAMECOUNT / 3u) * 0x9E3779B9u;
+        uint jit_seed = row * 1447u + t_slow;
+        float jitter  = (grain_unorm1(grain_uhash(jit_seed)) - 0.5) * 2.0;
+        disp_uv.y += jitter * crt_scanline_jitter * ReShade::PixelSize.y;
+    }
+
+    float2 src_uv = texcoord + disp_uv;
+
+    // ------------------------------------------------------------------
+    // Phase 2: fetch the (possibly displaced) source, applying accumulate
+    // modulation at the same displaced coordinate so afterglow follows the
+    // shifted image.
+    // ------------------------------------------------------------------
+    if (crt_accum_modulate > 0.001)
+    {
+        float4 prev    = tex2D(crt_accum_samp, src_uv) * crt_accum_modulate;
+        float4 current = tex2D(ReShade::BackBuffer, src_uv) * 0.96;
+        color = max(prev, current);
+    }
+    else
+    {
+        color = tex2D(ReShade::BackBuffer, src_uv);
+    }
+
+    float3 c = color.rgb;
 
     // -- Magnetic interference: radial hue rotation around source point --
     if (crt_magnetic_strength > 0.001)
@@ -6451,8 +6469,8 @@ void crt_interference_PS(
         float subcarrier = sin(phase + (floor(fc_pos.x) + floor(fc_pos.y)) * 3.14159);
         // Gate to colour edges only -- measure local colour variation
         float2 px = ReShade::PixelSize;
-        float3 left  = tex2D(ReShade::BackBuffer, texcoord - float2(px.x, 0)).rgb;
-        float3 right = tex2D(ReShade::BackBuffer, texcoord + float2(px.x, 0)).rgb;
+        float3 left  = tex2D(ReShade::BackBuffer, src_uv - float2(px.x, 0)).rgb;
+        float3 right = tex2D(ReShade::BackBuffer, src_uv + float2(px.x, 0)).rgb;
         float chroma_edge = length((left - right) - dot(left - right, float3(0.299,0.587,0.114)));
         float gate = saturate(chroma_edge * 8.0);
         // Add the subcarrier pattern modulated by the colour edge strength
@@ -6468,18 +6486,6 @@ void crt_interference_PS(
             ? (1.0 - crt_hum_intensity) + crt_hum_intensity * hum_scroll
             : (1.0 + crt_hum_intensity) + crt_hum_intensity * (hum_scroll - 1.0);
         c *= hum_mult;
-    }
-
-    // -- Scanline jitter: per-scanline vertical displacement --
-    if (crt_scanline_jitter > 0.001)
-    {
-        uint row      = uint(texcoord.y * float(BUFFER_HEIGHT));
-        uint t_slow   = (FRAMECOUNT / 3u) * 0x9E3779B9u;
-        uint jit_seed = row * 1447u + t_slow;
-        float jitter  = (grain_unorm1(grain_uhash(jit_seed)) - 0.5) * 2.0;
-        // Slider is in pixel units -- convert to UV
-        float2 jit_uv = float2(texcoord.x, texcoord.y + jitter * crt_scanline_jitter * ReShade::PixelSize.y);
-        c = tex2D(ReShade::BackBuffer, jit_uv).rgb;
     }
 
     // -- Rolling scanlines: sync instability at screen-resolution frequency --
@@ -6508,15 +6514,15 @@ void crt_interference_PS(
         // Scale offsets by resolution: NewPixie values tuned for 1080p.
         // At 4K the same UV offset covers twice as many pixels, so scale down.
         float ghost_res_scale = 1080.0 / float(BUFFER_HEIGHT);
-        float2 r_uv = texcoord + (float2(-0.014, -0.027)*0.85
+        float2 r_uv = src_uv + (float2(-0.014, -0.027)*0.85
                     + 0.007*float2(0.35*sin(1.0/7.0 + 15.0*texcoord.y + 0.9*t_g),
                                    0.35*sin(2.0/7.0 + 10.0*texcoord.y + 1.37*t_g))
                     + float2(0.001, 0.001)) * ghost_res_scale;
-        float2 g_uv = texcoord + (float2(-0.019, -0.020)*0.85
+        float2 g_uv = src_uv + (float2(-0.019, -0.020)*0.85
                     + 0.007*float2(0.35*cos(1.0/9.0 + 15.0*texcoord.y + 0.5*t_g),
                                    0.35*sin(2.0/9.0 + 10.0*texcoord.y + 1.50*t_g))
                     + float2(0.000, -0.002)) * ghost_res_scale;
-        float2 b_uv = texcoord + (float2(-0.017, -0.003)*0.85
+        float2 b_uv = src_uv + (float2(-0.017, -0.003)*0.85
                     + 0.007*float2(0.35*sin(2.0/3.0 + 15.0*texcoord.y + 0.7*t_g),
                                    0.35*cos(2.0/3.0 + 10.0*texcoord.y + 1.63*t_g))
                     + float2(-0.002, 0.000)) * ghost_res_scale;

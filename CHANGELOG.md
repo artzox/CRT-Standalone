@@ -8,6 +8,32 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.2.3] — 2026-06
+
+### Bug Fixes
+
+- **ICtCp gamut expansion hardened against NaN** — the forward transform fed LMS values straight into the PQ encode's `pow()`, which returns NaN in HLSL for a negative base and would propagate to a corrupt pixel. In-gamut Rec.709 input never goes negative, and upstream passes happened to clamp first, so this was latent rather than active — but the Oklab and darktable UCS paths already guard their inputs, and ICtCp now does the same rather than relying on an invariant maintained two passes earlier
+- **Beam integral guarding made symmetric** — the analytic `erf` path divided by sigma without the guard the Gauss-Legendre path uses. Reachable sigma never approaches zero, so no output changes; the two paths simply now defend identically
+
+---
+
+## [1.2.2] — 2026-06
+
+### Bug Fixes
+
+- **Beam Shape brightness step at 2.05 fixed** — the two branches of the beam integral implemented different kernels. The fast `erf` path (used for Beam Shape near 2.0) integrated the standard Gaussian `exp(-x²/2σ²)`, while the Gauss-Legendre path (all other shapes) integrated `exp(-(|x|/σ)ⁿ)`, which is narrower by √2. Nudging Beam Shape across the 2.05 branch threshold therefore produced a sudden drop in scanline brightness and width — up to **−28%** with a tight beam (σ=0.2), −12% at σ=0.5. The quadrature path now uses the matching kernel; the two branches agree to within 0.6% (residual is normal quadrature error). Beam Shape 2.0 output is unchanged; shapes above 2.0 are now correctly brighter/wider, as they always should have been
+- **Per-channel Persistence R/G/B sliders had no effect** — the persistence pass skipped early when the master Persistence Strength was below threshold, without considering the per-channel values, so setting R/G/B alone did nothing. The skip test now honours all four controls
+
+### Performance
+
+- **Dead persistence pass removed** — `ENABLE_PERSISTENCE=1` allocated a full-resolution RGBA16F texture and wrote it every frame in a `PersistenceStore` pass whose output was never sampled anywhere. Removing the texture, its pixel shader, and the pass halves the cost of the persistence feature with no change to output
+
+### New Features
+
+- **Persistence Horizontal Bleed** — new slider (default 0.0, no change to existing presets) spreading the phosphor trail sideways along the scan line, modelling phosphor grain scatter and diffusion through the tube glass. Without it the trail is a hard vertical smear. Uses a normalised centre-weighted kernel so the trail cannot gain brightness, with taps converted to linear before averaging. Costs two extra texture taps only when above zero
+
+---
+
 ## [1.2.1] — 2026-06
 
 ### Bug Fixes

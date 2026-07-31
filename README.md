@@ -414,11 +414,12 @@ Requires `ENABLE_DECAY=1` for the motion reference frame. Without decay, sharpen
 
 ### Phosphor Persistence
 
-Requires `ENABLE_PERSISTENCE=1`. Simulates slow phosphor fade — each frame blends slightly with a stored version of the previous frame, creating a subtle trailing afterimage on moving objects.
+Requires `ENABLE_PERSISTENCE=1`. Simulates phosphor decay *within* a single frame: the beam scans top to bottom, so a pixel's neighbours above were lit fractionally earlier and their emission is still fading. The pass blends in a downward-offset copy of the image to reproduce that trail. It only ever adds light, never darkens.
 
 - **Persistence Strength** — uniform blend across all channels. Used when all per-channel values are zero
-- **Persistence Decay Distance** — spatial gaussian decay radius of the stored frame
+- **Persistence Decay Distance** — how many pixels below each point the trail extends. Matching your scanline width gives the most natural result
 - **Persistence R / G / B** — per-channel decay rates. Real P22 phosphors decay at different speeds: green persists longest (~2–3ms), red intermediate, blue fastest (~0.5ms). When any per-channel value is non-zero, these override the uniform Persistence Strength. For authentic P22 behaviour: G=0.4, R=0.25, B=0.1
+- **Persistence Horizontal Bleed** — spreads the trail sideways along the scan line. The persisting glow is not a point: phosphor grain scatter and diffusion through the glass spread it horizontally as well as vertically, and without this the trail is a hard vertical smear. Symmetric by design — the beam's own left-to-right lag is invisible, since a scan line is drawn in ~50µs against a ~16ms frame. 0.0 = off (pure vertical trail), 1.0–3.0 = subtle softening, 4.0+ = wide glow spread. Costs two extra texture taps only when above zero
 
 ### Anti Burn-In
 

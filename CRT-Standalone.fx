@@ -583,6 +583,24 @@ uniform float crt_persistence_decay <
                  "Matches your scanline width for most natural result.";
     ui_min = 1.0; ui_max = 16.0; ui_step = 0.5;
 > = 4.0;
+
+uniform float crt_persistence_h_bleed <
+    ui_type = "drag"; ui_label = "Persistence Horizontal Bleed (pixels)";
+    ui_category = "Phosphor Persistence";
+    ui_tooltip = "Spreads the phosphor trail sideways along the scan line.\n"
+                 "The persisting glow is not a point: phosphor grain scatter and\n"
+                 "diffusion through the glass spread it horizontally as well as\n"
+                 "vertically. Without this the trail is a hard vertical smear.\n"
+                 "\n"
+                 "Symmetric by design -- the spread is spatial diffusion, not the\n"
+                 "beam's left-to-right lag (a whole scan line is drawn in ~50us,\n"
+                 "far too fast to be visible against a ~16ms frame).\n"
+                 "\n"
+                 "0.0 = disabled (pure vertical trail, original behaviour).\n"
+                 "1.0-3.0 = subtle softening of the trail. 4.0+ = wide glow spread.\n"
+                 "Costs two extra texture taps only when above zero.";
+    ui_min = 0.0; ui_max = 8.0; ui_step = 0.25;
+> = 0.0;
 #endif
 
 // ============================================================
@@ -2610,20 +2628,7 @@ sampler2D crt_decay_raw_sampler { Texture = crt_decay_raw_tex; };
 #endif // DECAY_BB_INTEGRAL
 #endif
 
-#if ENABLE_PERSISTENCE
-texture2D crt_persistence_tex < pooled = false; >
-{
-    Width  = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
-};
-sampler2D crt_persistence_samp
-{
-    Texture   = crt_persistence_tex;
-    MagFilter = LINEAR;
-    MinFilter = LINEAR;
-};
-#endif
+
 
 #if ENABLE_GRAIN
 // Grain delta texture: stores (grained - original) delta only
@@ -3184,13 +3189,17 @@ float crt_erf(float x)
 // Eliminates stairstepping at any subpixel position.
 float gauss_integral(float f, float hw, float sigma)
 {
-    float s = sigma * 1.41421356; // sigma * sqrt(2)
+    // Guarded to match gen_gauss_integral's quadrature path. Reachable sigma
+    // never gets near zero today (slider minimum 0.05, scaled by factors that
+    // stay above ~0.12), but the two paths should defend identically.
+    float s = max(sigma * 1.41421356, 0.0001); // sigma * sqrt(2)
     return 0.5 * (crt_erf((f + hw) / s) - crt_erf((f - hw) / s));
 }
 
 // Generalized Gaussian integral over pixel footprint [f-hw, f+hw].
-// gen_gauss(x, sigma, n) = exp(-(|x|/sigma)^n)
-// For n=2: identical to standard Gaussian (uses fast erf path).
+// gen_gauss(x, sigma, n) = exp(-(|x|/(sigma*sqrt2))^n), normalised so that
+// n=2 is exactly the standard Gaussian used by the erf path.
+// For n=2: takes the fast erf path (exact, and matches the quadrature form).
 // For n!=2: 16-point Gauss-Legendre quadrature (8 symmetric pairs).
 // 4-point GL fails badly when sigma << hw (e.g. sigma=0.05, tight beam)
 // because the narrow spike is missed by coarse nodes -- 85% error at n=8.
@@ -3205,7 +3214,13 @@ float gen_gauss_integral(float f, float hw, float sigma, float n)
         return gauss_integral(f, hw, sigma);
     }
 
-    float inv_sigma = 1.0 / max(sigma, 0.0001);
+    // Match the n==2 erf path exactly. That path integrates the standard
+    // normal exp(-x^2/(2*sigma^2)); writing the generalized form as
+    // exp(-(|x|/(sigma*sqrt2))^n) makes n=2 reduce to precisely that, so the
+    // two branches agree at the threshold instead of the quadrature kernel
+    // being narrower by sqrt(2) (which caused a brightness/width step of up
+    // to -28% when Beam Shape crossed 2.05).
+    float inv_sigma = 1.0 / max(sigma * 1.41421356, 0.0001);
     float s = 1.0 / (sigma * sqrt(2.0 * 3.14159265)); // normalisation
 
     // 16-point GL nodes and weights (8 symmetric pairs on [-1,1])
@@ -5260,7 +5275,13 @@ void crt_persistence_PS(
 {
     float3 current = tex2D(ReShade::BackBuffer, texcoord).rgb;
 
-    if (crt_persistence_strength < 0.001)
+    // Skip when the effect is fully off. This must consider the per-channel
+    // R/G/B sliders as well as the master strength: gating on strength alone
+    // made the per-channel controls dead unless strength was also raised.
+    float max_persist = max(crt_persistence_strength,
+                        max(crt_persistence_r,
+                        max(crt_persistence_g, crt_persistence_b)));
+    if (max_persist < 0.001)
     {
         color = float4(current, 1.0);
         return;
@@ -5269,14 +5290,33 @@ void crt_persistence_PS(
     // Sample from above -- the phosphor trail appears below the beam
     // The beam scans top to bottom, so pixels above were lit slightly earlier
     // and their phosphor emission trails downward
-    float py       = ReShade::PixelSize.y * crt_persistence_decay;
-    float3 above   = tex2D(ReShade::BackBuffer, texcoord - float2(0.0, py)).rgb;
+    float py = ReShade::PixelSize.y * crt_persistence_decay;
+
+    // Trail source: the pixel above (scanned slightly earlier by the beam).
+    // Optionally spread horizontally -- phosphor grain scatter and diffusion
+    // through the glass make the persisting glow a small patch, not a point.
+    // Taps are converted to linear BEFORE averaging so the sum is physically a
+    // sum of light rather than of encoded values.
+    float3 above_lin;
+    if (crt_persistence_h_bleed > 0.001)
+    {
+        float hx = ReShade::PixelSize.x * crt_persistence_h_bleed;
+        float3 a_c = glin(tex2D(ReShade::BackBuffer, texcoord + float2(0.0, -py)).rgb);
+        float3 a_l = glin(tex2D(ReShade::BackBuffer, texcoord + float2(-hx, -py)).rgb);
+        float3 a_r = glin(tex2D(ReShade::BackBuffer, texcoord + float2( hx, -py)).rgb);
+        // Normalised centre-weighted kernel (0.25/0.5/0.25): unit gain, so a
+        // flat field is unchanged and the trail cannot gain brightness.
+        above_lin = a_c * 0.5 + (a_l + a_r) * 0.25;
+    }
+    else
+    {
+        above_lin = glin(tex2D(ReShade::BackBuffer, texcoord + float2(0.0, -py)).rgb);
+    }
 
     // Per-channel persistence: R/G/B have different phosphor decay rates.
     // Green persists longest (P22 ~2-3ms), red intermediate, blue shortest (~0.5ms).
     // crt_persistence_r/g/b override per-channel; if all zero, fall back to uniform.
-    float3 cur_lin   = glin(current);
-    float3 above_lin = glin(above);
+    float3 cur_lin = glin(current);
 
     // Per-channel blend weights: use per-channel if any non-zero, else uniform
     float use_perchannel = max(max(crt_persistence_r, crt_persistence_g), crt_persistence_b);
@@ -5290,13 +5330,6 @@ void crt_persistence_PS(
     color = float4(max(current, trail), 1.0);
 }
 
-void crt_persistence_store_PS(
-    in  float4 position : SV_Position,
-    in  float2 texcoord : TEXCOORD0,
-    out float4 color    : SV_Target)
-{
-    color = tex2D(ReShade::BackBuffer, texcoord);
-}
 #endif
 
 // ============================================================
@@ -5969,7 +6002,12 @@ float3 crt_linear_to_ictcp(float3 c)
           683.0/4096.0, 2951.0/4096.0,  462.0/4096.0,
            99.0/4096.0,  309.0/4096.0, 3688.0/4096.0
     );
-    float3 lms = mul(M_LMS, c2020);
+    // Clamp to non-negative before the PQ encode below: pow() with a negative
+    // base returns NaN in HLSL, and a single NaN propagates to a garbage pixel.
+    // Rec.709 input is in-gamut for Rec.2020 so this is normally a no-op, but
+    // it matches the guarding already used by the Oklab and dtUCS paths and
+    // removes the dependency on upstream passes happening to clamp first.
+    float3 lms = max(mul(M_LMS, c2020), 0.0);
 
     // PQ EOTF (simplified -- maps linear to 0-1 PQ range for ICtCp)
     float m1 = 0.1593017578125;
@@ -6395,6 +6433,14 @@ void crt_interference_PS(
     }
 
     // -- Wiggle: horizontal UV displacement (NewPixie triple-sine) --
+    // KNOWN INCONSISTENCY (deliberately not changed): this scales a horizontal
+    // displacement by 1080/BUFFER_HEIGHT, whereas H-sync above uses
+    // 1080/BUFFER_WIDTH. Both are resolution-independent within a given aspect
+    // ratio, but only the H-sync form is aspect-independent -- wiggle (and the
+    // ghost offsets further down, which scale both axes by the same
+    // height-derived factor) displace ~31% further on 21:9 than on 16:9.
+    // Left as-is because changing it would shift the feel of existing presets;
+    // switch to BUFFER_WIDTH here if ultrawide consistency is ever wanted.
     if (crt_wiggle_strength > 0.0001)
     {
         float t_wig = (float(FRAMECOUNT) - 849.0*floor(float(FRAMECOUNT)/849.0)) * 36.0 * crt_wiggle_speed;
@@ -6732,12 +6778,6 @@ technique CRT_Standalone <
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_persistence_PS;
-    }
-    pass PersistenceStore
-    {
-        VertexShader = PostProcessVS;
-        PixelShader  = crt_persistence_store_PS;
-        RenderTarget = crt_persistence_tex;
     }
     #endif
     #if ENABLE_EDGE_BLUR

@@ -26,7 +26,7 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
-## [1.3.0] — 2026-10
+## [1.3.0] — 2026-10 (unreleased)
 
 Preset-affecting release: BFI / Variable MPRT colour and highlight fixes on every pipeline, a sharper Pre-Blur, and a signal-relative Dark Frame Floor. See **Re-tuning** at the end of this entry.
 

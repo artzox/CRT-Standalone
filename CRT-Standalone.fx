@@ -1,7 +1,7 @@
 #include "ReShade.fxh"
 
 /*
-    CRT-Standalone.fx
+    CRT-Standalone.fx  --  v1.4.0
     Self-contained CRT shader. Features:
     - Pre-blur (H+V) before mask/scanlines, matching Guest Advanced SIZEH/SIZEV
     - Aperture grille mask (resolution-aware, anti-aliased)
@@ -79,6 +79,15 @@
 // how the glow texture is composited. If you see this, set GLOW_RESOLUTION=1.
 #ifndef GLOW_RESOLUTION
     #define GLOW_RESOLUTION 2
+#endif
+
+// Glow passes (tight + wide dual-scale bloom).
+// 1 = compiled in (default). 0 = removes the four glow passes, their textures
+// and sliders -- worth setting if Glow Strength and Wide Glow Strength are both
+// 0 in your preset. Screen Reflection and Tube Diffuse sample the wide glow,
+// so its two passes stay compiled while either of those is enabled.
+#ifndef ENABLE_GLOW
+    #define ENABLE_GLOW 1
 #endif
 
 // Edge Feedback: cross-frame CRT edge and peripheral enhancement.
@@ -224,6 +233,18 @@
 #ifndef PREBLUR_LANCZOS_TAPS
     #define PREBLUR_LANCZOS_TAPS 2
 #endif
+
+// Restore the pre-1.3.0 reconstruction offset (default 0).
+// Up to 1.2.3 the Lanczos / Catmull-Rom reconstruction sampled texel corners
+// instead of texel centres. On an unwarped image that is not a passthrough: it
+// softened the Pre-Blur centre tap (and geometry-warped sampling) by roughly a
+// 3x3 blur -- the "mild AA" Pre-Blur was credited with -- and cost 16 taps per
+// pixel even at Pre-Blur sigma 0.
+// 1.3.0 samples texel centres, so the image is sharper and sigma 0 is an exact
+// one-fetch copy. Set 1 to bring the old softness back bit-exactly.
+#ifndef PREBLUR_LEGACY_SOFTNESS
+    #define PREBLUR_LEGACY_SOFTNESS 0
+#endif
 // Phosphor persistence simulation (within-frame asymmetric vertical blur)
 #ifndef ENABLE_PERSISTENCE
     #define ENABLE_PERSISTENCE 1
@@ -238,13 +259,30 @@
 #endif
 
 // Blur Busters spatial overlap-integral mode (Variable MPRT with Tube Position
-// simulation, 240Hz+ only). Requires two extra full-resolution history textures
-// (raw + prev2) written every frame -- significant bandwidth. Disabled by
-// default: standard BFI, Fibonacci decay, dark blend, and motion sharpen all
-// work without it. Enable only if you use Decay Method = Variable MPRT with
-// Tube Position on.
+// simulation, 240Hz+ only). Allocates three full-resolution per-cycle history
+// textures, rotated once per decay cycle while Tube Position is on. Disabled by
+// default: standard BFI, Fibonacci decay, dark blend, motion sharpen and the
+// Variable MPRT brightness budget all work without it.
 #ifndef DECAY_BB_INTEGRAL
     #define DECAY_BB_INTEGRAL 0
+#endif
+
+// BFI Auto-Resync luminance monitors (default 1 = compiled in).
+// The monitors are four 1x1 passes, but because they run after the decay pass
+// they make ReShade copy the whole back buffer one extra time per frame
+// (~118 MB at 5K scRGB). Set 0 if you never use BFI Auto-Resync: removes the
+// passes, that copy, and the toggle.
+#ifndef DECAY_AUTO_RESYNC
+    #define DECAY_AUTO_RESYNC 1
+#endif
+
+// BFI + frame generation diagnostic (default 0). 1 = draws a small panel in
+// the top-left corner: incoming brightness and on-screen time of frames on
+// the lit and dark slots, and how often Frametime Spike Suppress passes a
+// frame through. For testing only: adds one back-buffer pass and two 1x1
+// passes; nothing at all when 0.
+#ifndef DECAY_FG_DEBUG
+    #define DECAY_FG_DEBUG 0
 #endif
 
 // Anti Burn-In
@@ -259,6 +297,8 @@
 // 0 = No Soop (default): signal passes through unmodified at boundaries
 // 1 = Soop scRGB: Reinhard compression at start, InvReinhard at end
 // 2 = Soop HDR10: PQ decode + Reinhard at start, InvReinhard + PQ encode at end
+// With ENABLE_DECAY=1 the end-of-chain step (InvReinhard / PQ encode) is
+// performed inside the decay pass, saving one full-resolution pass.
 #ifndef PIPELINE
     #define PIPELINE 0
 #endif
@@ -351,6 +391,10 @@
 #ifndef LINEAR_HDR_PEAK_NITS
     #define LINEAR_HDR_PEAK_NITS 1400
 #endif
+
+// Wide-glow passes are needed by the glow itself and by the two effects that
+// sample the wide-glow texture.
+#define CRT_GLOW_WIDE (ENABLE_GLOW || ENABLE_SCREEN_REFLECT || ENABLE_TUBE_DIFFUSE)
 
 // System uniforms -- always present regardless of feature flags
 uniform uint  FRAMECOUNT    < source = "framecount"; >;
@@ -1307,6 +1351,7 @@ uniform int crt_bb_mode <
     ui_items = "Peak Channel\0Luma (Rec.709)\0Per Channel\0";
 > = 0;
 
+#if ENABLE_GLOW
 uniform float crt_glow_strength <
     ui_type = "drag"; ui_label = "Glow Strength";
     ui_category = "Brightness & Glow";
@@ -1324,7 +1369,9 @@ uniform float crt_glow_v_radius <
     ui_category = "Brightness & Glow";
     ui_min = 1.0; ui_max = 16.0; ui_step = 0.5;
 > = 3.0;
+#endif
 
+#if CRT_GLOW_WIDE
 uniform float crt_glow_sigma <
     ui_type = "drag"; ui_label = "Glow Sigma";
     ui_category = "Brightness & Glow";
@@ -1361,7 +1408,9 @@ uniform float crt_glow_wide_threshold <
                  "captures more of the scene rather than just peak highlights.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.01;
 > = 0.0;
+#endif
 
+#if ENABLE_GLOW
 uniform float crt_glow_spectral <
     ui_type = "drag"; ui_label = "Spectral Bloom";
     ui_category = "Brightness & Glow";
@@ -1409,7 +1458,9 @@ uniform float crt_glow_knee <
                  "varies by game brightness distribution.";
     ui_min = 0.0; ui_max = 0.5; ui_step = 0.01;
 > = 0.0;
+#endif
 
+#if CRT_GLOW_WIDE
 uniform float crt_glow_h_mix <
     ui_type = "drag"; ui_label = "Horizontal vs Vertical Glow Mix";
     ui_category = "Brightness & Glow";
@@ -1422,6 +1473,7 @@ uniform float crt_glow_balance <
     ui_tooltip = "0.0 = neutral white glow, 1.0 = raw colour.";
     ui_min = 0.0; ui_max = 1.0; ui_step = 0.05;
 > = 0.0;
+#endif
 
 // ============================================================
 // Uniforms -- Halation
@@ -1954,21 +2006,24 @@ uniform int crt_decay_method <
     ui_label = "Decay Method";
     ui_category = "Phosphor Decay";
     ui_items = "Fibonacci (uniform darkening)\0"
-               "Variable MPRT (Blur Busters - SDR only)\0"
+               "Variable MPRT (brightness budget)\0"
                "BFI - Black Frame Insertion\0";
     ui_tooltip = "Fibonacci: uniform per-frame darkening. Works at any fps, any pipeline.\n"
                  "No history frames, no pipeline dependency.\n"
                  "\n"
-                 "Variable MPRT (SDR only): Blur Busters brightness-budget algorithm.\n"
-                 "Dark pixels decay fast, bright pixels preserve energy across frames.\n"
-                 "PIPELINE 0 only -- uses sRGB transfer function internally.\n"
-                 "On PIPELINE 1/2 highlights will be remapped incorrectly (use BFI instead).\n"
-                 "Enable Raster Sweep for 240Hz+ spatial variation (experimental).\n"
+                 "Variable MPRT: Blur Busters brightness-budget principle. Each pixel's\n"
+                 "light for the cycle is emitted front-loaded: dim pixels flash once\n"
+                 "(maximum clarity), bright pixels that don't fit under the panel\n"
+                 "ceiling spill into the following frame(s). Average brightness and\n"
+                 "colour are kept whenever the panel can hold them -- nothing clips.\n"
+                 "Any pipeline.\n"
+                 "Raster Sweep (Tube Position) adds the 240Hz+ overlap integral.\n"
                  "\n"
-                 "BFI: Hard black frame insertion, correct for any pipeline.\n"
-                 "PIPELINE 0: gain applied in sRGB->linear->sRGB space.\n"
-                 "PIPELINE 1/2: gain applied via InvReinhard->scale->Reinhard.\n"
-                 "No history frames. Recommended for PIPELINE 1/2.";
+                 "BFI: hard black frame insertion -- dark frames stay dark, maximum\n"
+                 "clarity. Boosted lit frames use BFI Highlight Roll-off. Any pipeline.\n"
+                 "\n"
+                 "Both apply gain to emitted light: sRGB EOTF (PIPELINE 0), raw scRGB\n"
+                 "(LINEAR_HDR_INPUT=1) or the exact Soop After transform (PIPELINE 1/2).";
 > = 0;
 
 uniform int crt_decay_frames <
@@ -2050,57 +2105,94 @@ uniform float crt_decay_luma_protect <
 uniform float crt_decay_gain <
     ui_type = "drag"; ui_label = "Gain vs Blur";
     ui_category = "Phosphor Decay - BFI / Variable MPRT";
-    ui_tooltip = "Lit frame brightness multiplier.\n"
-                 "litGain = frames x gain. With frames=2:\n"
-                 "  0.5 (default): litGain=1.0, lit frame = signal unchanged.\n"
-                 "    No clipping on any content. Sky/bloom look correct.\n"
-                 "  > 0.5: lit frame is boosted to partially recover average\n"
-                 "    brightness, but bright content clips to grey/white.\n"
-                 "If you see flicker or highlights greying out, reduce below 0.5.";
+    ui_tooltip = "Average brightness kept, relative to no BFI.\n"
+                 "litGain = frames x gain (inverted cycle: frames x gain / (frames-1)).\n"
+                 "With frames=2:\n"
+                 "  0.5 (default): litGain = 1.0 -- the lit frame is the signal\n"
+                 "    unchanged, average brightness is halved.\n"
+                 "  1.0: litGain = 2.0 -- full average brightness recovered.\n"
+                 "    BFI rolls off highlights that no longer fit under the panel\n"
+                 "    ceiling; Variable MPRT spills them into the next frame.\n"
+                 "\n"
+                 "HDR (PIPELINE 1/2) has the headroom for this: everything up to half\n"
+                 "the panel peak is doubled exactly. In SDR the ceiling is SDR white,\n"
+                 "so bright content runs out of headroom much sooner -- there, raising\n"
+                 "the TV's own SDR brightness is the cleaner way to recover it.";
     ui_min = 0.3; ui_max = 1.0; ui_step = 0.01;
 > = 0.5;
+
+uniform bool crt_bfi_highlight_rolloff <
+    ui_label = "BFI Highlight Roll-off";
+    ui_category = "Phosphor Decay - BFI / Variable MPRT";
+    ui_tooltip = "BFI method. When Gain vs Blur lifts the lit frame above the\n"
+                 "signal (litGain > 1), highlights that would exceed the panel are\n"
+                 "rolled off along a smooth shoulder instead of clipping channel by\n"
+                 "channel.\n"
+                 "\n"
+                 "Hue-preserving: the whole colour is scaled together, so bright\n"
+                 "saturated colours keep their hue instead of drifting toward\n"
+                 "yellow, white or grey. Never darker than the unboosted signal;\n"
+                 "content already at the panel peak is not boosted.\n"
+                 "No effect at litGain <= 1 (gain 0.5 with frames=2).\n"
+                 "\n"
+                 "Ceiling: SDR white (PIPELINE 0), Display Peak Brightness\n"
+                 "(PIPELINE 1/2), LINEAR_HDR_PEAK_NITS (raw scRGB).\n"
+                 "Off = per-channel clip at the panel (1.2.x behaviour).\n"
+                 "Variable MPRT does not use this -- it spills instead.";
+> = true;
+
+uniform float crt_bfi_rolloff_knee <
+    ui_type = "drag"; ui_label = "BFI Roll-off Knee";
+    ui_category = "Phosphor Decay - BFI / Variable MPRT";
+    ui_tooltip = "Fraction of the panel ceiling below which the BFI lit frame gets\n"
+                 "the full gain. Above it the boosted signal is compressed into the\n"
+                 "remaining headroom (slope-continuous, monotonic).\n"
+                 "Higher = more of the range at full gain, firmer shoulder.\n"
+                 "0.75 (default) is a good balance.";
+    ui_min = 0.5; ui_max = 0.95; ui_step = 0.01;
+> = 0.75;
 
 uniform float crt_decay_dark_floor <
     ui_type = "drag"; ui_label = "VRR Dark Frame Floor";
     ui_category = "Phosphor Decay - BFI / Variable MPRT (Experimental)";
-    ui_tooltip = "Minimum brightness of dark frames. 0.0 = pure black (default).\n"
+    ui_tooltip = "Dark-frame level as a fraction of the signal. 0.0 = pure black (default).\n"
                  "\n"
                  "Under VRR, frame display times are irregular -- a lit frame\n"
                  "may show for 6ms and the next dark frame for 14ms, or vice\n"
                  "versa. The eye integrates varying lit/dark ratios each cycle,\n"
                  "producing irregular brightness fluctuation (VRR flicker).\n"
                  "\n"
-                 "Raising this floor reduces the brightness swing between lit\n"
-                 "and dark frames, directly reducing flicker amplitude at the\n"
-                 "cost of some motion clarity (dark frames are no longer black).\n"
+                 "Raising this keeps a dimmed copy of the image on dark frames,\n"
+                 "shrinking the lit/dark swing (flicker amplitude) at the cost of\n"
+                 "some motion clarity. Same meaning as the Sine BFI trough.\n"
+                 "\n"
+                 "Signal-relative since 1.3.0: true black stays black on dark\n"
+                 "frames. (Before, the floor was a flat grey that lifted black\n"
+                 "level and muted contrast -- re-tune values from 1.2.x.)\n"
                  "\n"
                  "0.00 = maximum clarity, maximum VRR flicker (locked Hz only).\n"
-                 "0.10 = good balance, flicker mostly eliminated on VRR displays.\n"
-                 "0.20 = very stable, noticeable clarity reduction.\n"
-                 "Start at 0.0 and raise until VRR flicker becomes acceptable.";
+                 "Raise until VRR flicker becomes acceptable.";
     ui_min = 0.0; ui_max = 0.5; ui_step = 0.01;
 > = 0.0;
 
 uniform bool crt_decay_dark_blend <
     ui_label = "VRR Dark Frame Blend";
     ui_category = "Phosphor Decay - BFI / Variable MPRT (Experimental)";
-    ui_tooltip = "Only active when VRR Dark Frame Floor > 0.\n"
+    ui_tooltip = "Only active when VRR Dark Frame Floor > 0 (square-wave dark frames).\n"
                  "\n"
-                 "OFF (default): dark frames output a flat grey at the floor\n"
-                 "level. Clean, no ghosting, but the transition lit->grey->lit\n"
-                 "is an abrupt cut which may be more visible as flicker.\n"
+                 "OFF (default): dark frames show the current frame scaled by the\n"
+                 "floor.\n"
                  "\n"
-                 "ON: dark frames output lerp(prev_frame, curr_frame, 0.5)\n"
-                 "scaled to the floor level. The dark frame contains a 50/50\n"
-                 "blend of the previous and current rendered frames, giving\n"
-                 "the eye a mid-point image to integrate rather than a hard\n"
-                 "grey cut. May further reduce perceived flicker.\n"
+                 "ON: dark frames show a 50/50 blend of the previous and current\n"
+                 "rendered frames, scaled by the floor -- a mid-point image for the\n"
+                 "eye to integrate. May further reduce perceived flicker.\n"
+                 "(Up to 1.2.3 the history was overwritten before it was read, so\n"
+                 "this blended the current frame with itself.)\n"
                  "\n"
                  "Risk: on fast motion, prev and curr frames are spatially\n"
                  "misaligned -- the blend produces a double-image ghost at\n"
-                 "floor brightness. At floor=0.10 this is ~10pct brightness\n"
-                 "and usually invisible. At floor=0.20+ it may be noticeable\n"
-                 "on fast camera pans. Test with both settings.";
+                 "floor brightness. Test with both settings.\n"
+                 "Costs one full-resolution history write per frame while active.";
 > = false;
 
 uniform bool crt_decay_sine_bfi <
@@ -2197,32 +2289,50 @@ uniform bool crt_decay_fg_phase <
                  "ReShade and FRAMECOUNT does not see their generated frames.";
 > = false;
 
+
+uniform int crt_decay_spike_mode <
+    ui_type = "combo";
+    ui_label = "Frametime Spike Detection";
+    ui_category = "Phosphor Decay - BFI / Variable MPRT (Experimental)";
+    ui_items = "Absolute (vs expected period)\0Relative (vs running average)\0";
+    ui_tooltip = "What Frametime Spike Suppress compares each frame against.\n"
+                 "\n"
+                 "Absolute (default): CRT_FRAMETIME_EXPECTED (8.33ms = 120Hz).\n"
+                 "Relative: the running average frametime. Steady pacing at any\n"
+                 "frame rate keeps BFI on, and only frames that arrive late\n"
+                 "against their neighbours are passed through -- meant for frame\n"
+                 "generation with uneven pacing. Try thresholds 1.2-1.5.";
+> = 0;
+
 uniform float crt_decay_spike_threshold <
     ui_type = "drag"; ui_label = "Frametime Spike Suppress";
     ui_category = "Phosphor Decay - BFI / Variable MPRT (Experimental)";
-    ui_tooltip = "Suppresses BFI output on frames where frametime exceeds this\n"
-                 "multiple of the expected frame period, outputting unmodified\n"
-                 "passthrough instead.\n"
+    ui_tooltip = "Passes a frame through unmodified (lit) instead of applying\n"
+                 "BFI when its frametime exceeds this multiple of the reference\n"
+                 "(see Frametime Spike Detection).\n"
                  "\n"
-                 "Frametime spikes (hitches) cause the display to hold a lit or\n"
-                 "dark frame for much longer than expected -- the eye sees a\n"
-                 "sudden very bright or very dark flash.\n"
+                 "A frame held on screen much longer than expected shows as a\n"
+                 "bright or dark flash; passing it through softens that.\n"
                  "\n"
-                 "1.5 = suppress if frame took > 1.5x the expected period.\n"
-                 "2.0 = only suppress severe spikes (default).\n"
-                 "10.0 = effectively disabled.\n"
+                 "Absolute: with a frame cap just below refresh (116-118 fps =\n"
+                 "8.5-8.6ms at 120Hz), values near 1.0 flag most frames, so BFI\n"
+                 "is mostly off -- less flicker, but little motion clarity left.\n"
+                 "DECAY_FG_DEBUG=1 shows how many frames are being passed through.\n"
+                 "Relative: 1.2-1.5 catches irregular frames only.\n"
                  "\n"
-                 "Expected period = 1000ms / display Hz. At 120Hz = 8.33ms,\n"
-                 "so threshold 2.0 suppresses frames > 16.67ms.\n"
-                 "Set CRT_FRAMETIME_EXPECTED to your target frametime in ms\n"
-                 "via the preprocessor (default 8.33 = 120Hz).";
-    ui_min = 1.0; ui_max = 10.0; ui_step = 0.1;
+                 "10.0 = effectively disabled (default).";
+    ui_min = 1.0; ui_max = 10.0; ui_step = 0.05;
 > = 10.0;
 
+#if DECAY_AUTO_RESYNC
 uniform bool crt_decay_auto_resync <
     ui_label = "BFI Auto-Resync";
     ui_category = "Phosphor Decay - BFI / Variable MPRT (Experimental)";
-    ui_tooltip = "Monitors average luminance of lit vs dark frames.\n"
+    ui_tooltip = "Not recommended with frame generation: it judges lit and dark\n"
+                 "frames by the phase it is correcting, so after a flip it can\n"
+                 "switch back and forth.\n"
+                 "\n"
+                 "Monitors average luminance of lit vs dark frames.\n"
                  "If the dark frame becomes significantly brighter than expected\n"
                  "(indicating the BFI phase has flipped due to a dropped frame\n"
                  "or VSync hitch), automatically corrects the phase by 1 frame.\n"
@@ -2234,19 +2344,20 @@ uniform bool crt_decay_auto_resync <
                  "adds a small per-frame luminance sample and comparison.\n"
                  "Enable if you experience sudden unrecoverable BFI flicker.";
 > = false;
+#endif
 
 uniform float crt_decay_scene_threshold <
     ui_type = "drag"; ui_label = "Scene Change Threshold (MPRT only)";
     ui_category = "Phosphor Decay - BFI / Variable MPRT (Experimental)";
-    ui_tooltip = "Variable MPRT only. Luminance delta that triggers a scene-change bypass.\n"
-                 "On a hard cut to a much brighter scene (e.g. ground to clouds),\n"
-                 "history frames hold stale dark values, diluting the bright current\n"
-                 "frame and causing a 2-3 frame grey flash.\n"
-                 "When per-pixel luma difference between current and prev1 exceeds\n"
-                 "this threshold, the overlap integral is skipped and the current\n"
-                 "frame passes through at full gain for that pixel.\n"
+    ui_tooltip = "Variable MPRT with Raster Sweep only (DECAY_BB_INTEGRAL=1).\n"
+                 "Luminance delta (relative to the panel ceiling) between the\n"
+                 "current frame and the previous cycle's frame that triggers a\n"
+                 "scene-change bypass. On a hard cut to a much brighter scene the\n"
+                 "history holds stale dark values, diluting the bright current frame\n"
+                 "into a 2-3 frame grey flash; above the threshold the overlap\n"
+                 "integral is skipped for that pixel.\n"
                  "1.0 = disabled (default). 0.20 = catches most hard cuts.\n"
-                 "Lower = more aggressive bypass. Has no effect in BFI or Fibonacci.";
+                 "Lower = more aggressive bypass. No effect in BFI or Fibonacci.";
     ui_min = 0.05; ui_max = 1.0; ui_step = 0.01;
 > = 1.0;
 
@@ -2254,17 +2365,17 @@ uniform bool crt_decay_tube_pos <
     ui_label = "Raster Sweep - TubePos (MPRT only)";
     ui_category = "Phosphor Decay - BFI / Variable MPRT (Experimental)";
     ui_tooltip = "Variable MPRT only. Spatially-varying phase simulating the CRT beam\n"
-                 "sweeping top-to-bottom.\n"
+                 "sweeping top-to-bottom (Blur Busters overlap integral).\n"
                  "120Hz: KEEP DISABLED. The sweep period equals the frame period so the\n"
                  "gradient band appears frozen on screen -- a static bright or\n"
                  "semi-transparent band. This is not a bug; it is physics.\n"
                  "240Hz+: enable for a subtle authentic rolling gradient.\n"
-                 "When disabled, tubePos is fixed at 0.5 (uniform, no artifact).\n"
+                 "When disabled, Variable MPRT uses the brightness-budget spill.\n"
                  "Has no effect in BFI or Fibonacci.\n"
                  "\n"
-                 "REQUIRES the DECAY_BB_INTEGRAL=1 preprocessor definition, which\n"
-                 "allocates two extra full-resolution history textures. Without it\n"
-                 "this toggle falls back to standard lit/dark BFI.";
+                 "REQUIRES the DECAY_BB_INTEGRAL=1 preprocessor definition (three\n"
+                 "per-cycle history textures). Without it this toggle falls back to\n"
+                 "the brightness-budget spill.";
 > = false;
 #endif
 
@@ -2445,8 +2556,9 @@ uniform float crt_soop_peak_nits <
     ui_category = "Pipeline";
     ui_tooltip = "Peak luminance of your display in nits.\n"
                  "Sony A95L 77\": 1400\n"
-                 "Used to set the Reinhard white point for scRGB compression.\n"
-                 "Only active when PIPELINE=1 or PIPELINE=2.";
+                 "PIPELINE 1: Reinhard white point for scRGB compression.\n"
+                 "PIPELINE 1/2: ceiling for BFI Highlight Roll-off and the Variable\n"
+                 "MPRT brightness budget (the most light one frame may emit).";
     ui_min = 100.0; ui_max = 4000.0; ui_step = 10.0;
 > = 1400.0;
 
@@ -2573,6 +2685,7 @@ texture2D crt_decay_phase_tex < pooled = false; >
 };
 sampler2D crt_decay_phase_sampler { Texture = crt_decay_phase_tex; };
 
+#if DECAY_AUTO_RESYNC
 // Auto-resync luminance monitor: two 1x1 textures for lit and dark frame EMA.
 // Luma monitor: ping-pong textures so the PS can read previous frame
 // while writing current frame (avoids same-pass read/write error).
@@ -2584,47 +2697,112 @@ sampler2D crt_decay_luma_lit_sampler      { Texture=crt_decay_luma_lit_tex;     
 sampler2D crt_decay_luma_dark_sampler     { Texture=crt_decay_luma_dark_tex;      MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
 sampler2D crt_decay_luma_lit_prev_samp    { Texture=crt_decay_luma_lit_prev_tex;  MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
 sampler2D crt_decay_luma_dark_prev_samp   { Texture=crt_decay_luma_dark_prev_tex; MipFilter=NONE; MinFilter=POINT; MagFilter=POINT; };
+#endif // DECAY_AUTO_RESYNC
 
-// History format: Pipeline 0 backbuffer is bounded [0,1] so 10-bit is
-// lossless there; Pipeline 1/2 hold scRGB/PQ-derived values that can exceed
-// 1.0 and need half-float. Halves history bandwidth for SDR-pipeline users.
-#if PIPELINE == 0
+// History format: the Pipeline 0 SDR back buffer is bounded [0,1] so 10-bit is
+// lossless there. Raw scRGB (LINEAR_HDR_INPUT=1) and Pipeline 1/2 can exceed
+// 1.0 and need half-float (1.2.x stored raw scRGB history in RGB10A2, clipping
+// it at 80 nits).
+#if PIPELINE == 0 && !LINEAR_HDR_INPUT
     #define CRT_DECAY_HIST_FORMAT RGB10A2
 #else
     #define CRT_DECAY_HIST_FORMAT RGBA16F
 #endif
 
-// prev1: previous raw frame. Always needed when decay is on (dark blend,
-// motion sharpen, BB integral).
-texture2D crt_decay_prev1_tex < pooled = false; >
+// Running average frametime (1x1, ping-pong) for Relative spike detection.
+texture2D crt_decay_ftavg_tex      < pooled = false; > { Width = 1; Height = 1; Format = R32F; };
+texture2D crt_decay_ftavg_prev_tex < pooled = false; > { Width = 1; Height = 1; Format = R32F; };
+sampler2D crt_decay_ftavg_sampler   { Texture = crt_decay_ftavg_tex;      MipFilter = NONE; MinFilter = POINT; MagFilter = POINT; };
+sampler2D crt_decay_ftavg_prev_samp { Texture = crt_decay_ftavg_prev_tex; MipFilter = NONE; MinFilter = POINT; MagFilter = POINT; };
+
+// Frametime Spike Suppress test for the current frame.
+//   Absolute: longer than threshold x CRT_FRAMETIME_EXPECTED.
+//   Relative: longer than threshold x the running average frametime up to
+//   the previous frame, so steady pacing at any rate keeps BFI on and only
+//   frames arriving late against their neighbours are passed through.
+bool crt_decay_is_spike()
+{
+    bool spike;
+    if (crt_decay_spike_mode == 1)
+    {
+        float avg = tex2D(crt_decay_ftavg_prev_samp, float2(0.5, 0.5)).r;
+        spike = (avg > 0.5) && (CRT_FRAMETIME > avg * crt_decay_spike_threshold);
+    }
+    else
+        spike = CRT_FRAMETIME > CRT_FRAMETIME_EXPECTED * crt_decay_spike_threshold;
+    return spike;
+}
+
+#if DECAY_FG_DEBUG
+// Diagnostic state (1x1, ping-pong): R/G = EMA of incoming luminance on
+// even/odd frames, B/A = EMA of on-screen time (ms) of even/odd frames.
+texture2D crt_decay_fgmon_tex      < pooled = false; > { Width = 1; Height = 1; Format = RGBA32F; };
+texture2D crt_decay_fgmon_prev_tex < pooled = false; > { Width = 1; Height = 1; Format = RGBA32F; };
+sampler2D crt_decay_fgmon_sampler   { Texture = crt_decay_fgmon_tex;      MipFilter = NONE; MinFilter = POINT; MagFilter = POINT; };
+sampler2D crt_decay_fgmon_prev_samp { Texture = crt_decay_fgmon_prev_tex; MipFilter = NONE; MinFilter = POINT; MagFilter = POINT; };
+#endif
+
+// Per-frame history, ping-pong: even frames write hist0, odd frames hist1, and
+// readers take the other texture -- the previous frame's pre-decay image.
+// (Up to 1.2.3 one texture was overwritten before the decay pass read it, so
+// Dark Frame Blend blended the current frame with itself.) Both store passes
+// discard -- no read, no write -- unless Dark Frame Blend is active or Motion
+// Sharpen is compiled in.
+texture2D crt_decay_hist0_tex < pooled = false; >
 {
     Width  = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
     Format = CRT_DECAY_HIST_FORMAT;
 };
-sampler2D crt_decay_prev1_sampler { Texture = crt_decay_prev1_tex; };
+sampler2D crt_decay_hist0_sampler { Texture = crt_decay_hist0_tex; };
+texture2D crt_decay_hist1_tex < pooled = false; >
+{
+    Width  = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = CRT_DECAY_HIST_FORMAT;
+};
+sampler2D crt_decay_hist1_sampler { Texture = crt_decay_hist1_tex; };
+
+// Previous frame's pre-decay image (the history texture not written this frame).
+float3 crt_decay_prev_frame(float2 uv)
+{
+    float3 p;
+    [branch]
+    if ((FRAMECOUNT & 1u) == 0u)
+        p = tex2D(crt_decay_hist1_sampler, uv).rgb;
+    else
+        p = tex2D(crt_decay_hist0_sampler, uv).rgb;
+    return p;
+}
 
 #if DECAY_BB_INTEGRAL
-// prev2 + raw: only read by the Blur Busters overlap-integral path
-// (Variable MPRT with Tube Position on). Gated to avoid two full-resolution
-// texture writes per frame for the standard BFI/Fibonacci methods.
-texture2D crt_decay_prev2_tex < pooled = false; >
+// Overlap-integral history, one frame per decay CYCLE (the integral works in
+// CRT-frame units, not refreshes): cyc0 = this cycle's frame, cyc1 = the
+// previous cycle, cyc2 = the one before. Rotated on the first sub-frame of each
+// cycle; the rotation passes discard on all other frames and while Tube
+// Position is off. (Up to 1.2.3 all three were overwritten with the current
+// frame before being read, so the integral and scene-change test saw no history.)
+texture2D crt_decay_cyc0_tex < pooled = false; >
 {
     Width  = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
     Format = CRT_DECAY_HIST_FORMAT;
 };
-sampler2D crt_decay_prev2_sampler { Texture = crt_decay_prev2_tex; };
-// Raw game frame captured before decay runs -- used for clean history comparison.
-// The prev1/prev2 textures capture post-decay output (alternating lit/black),
-// which breaks scene-change detection. This texture holds the unmodified signal.
-texture2D crt_decay_raw_tex < pooled = false; >
+sampler2D crt_decay_cyc0_sampler { Texture = crt_decay_cyc0_tex; };
+texture2D crt_decay_cyc1_tex < pooled = false; >
 {
     Width  = BUFFER_WIDTH;
     Height = BUFFER_HEIGHT;
     Format = CRT_DECAY_HIST_FORMAT;
 };
-sampler2D crt_decay_raw_sampler { Texture = crt_decay_raw_tex; };
+sampler2D crt_decay_cyc1_sampler { Texture = crt_decay_cyc1_tex; };
+texture2D crt_decay_cyc2_tex < pooled = false; >
+{
+    Width  = BUFFER_WIDTH;
+    Height = BUFFER_HEIGHT;
+    Format = CRT_DECAY_HIST_FORMAT;
+};
+sampler2D crt_decay_cyc2_sampler { Texture = crt_decay_cyc2_tex; };
 #endif // DECAY_BB_INTEGRAL
 #endif
 
@@ -2640,15 +2818,8 @@ texture2D crt_grain_raw_tex < pooled = false; >
 };
 sampler2D crt_grain_raw_samp { Texture = crt_grain_raw_tex; };
 
-
-// Pre-grain snapshot: clean backbuffer before grain is applied
-texture2D crt_pregrain_tex < pooled = false; >
-{
-    Width  = BUFFER_WIDTH;
-    Height = BUFFER_HEIGHT;
-    Format = RGBA16F;
-};
-sampler2D crt_pregrain_samp { Texture = crt_pregrain_tex; };
+// (1.3.0: the pre-grain snapshot texture is gone -- GrainDiffuse reads the
+// clean image straight from the back buffer, which GrainMerged leaves untouched.)
 #endif // ENABLE_GRAIN
 
 // Accumulation texture for interference afterglow (NewPixie accumulate modulation)
@@ -2662,6 +2833,7 @@ texture2D crt_accum_tex < pooled = false; >
 sampler2D crt_accum_samp { Texture = crt_accum_tex; MagFilter = LINEAR; MinFilter = LINEAR; };
 #endif // ENABLE_INTERFERENCE
 
+#if ENABLE_GLOW
 // Glow horizontal blur output
 texture2D crt_glow_tex < pooled = false; >
 {
@@ -2694,6 +2866,9 @@ sampler2D crt_glow_v_sampler
     MipFilter = NONE;
 };
 
+#endif // ENABLE_GLOW
+
+#if CRT_GLOW_WIDE
 // Wide (secondary) glow textures -- run at 2x lower resolution than tight glow.
 // Large-area bloom for bright surfaces, complementing the tight per-element glow.
 texture2D crt_glow_wide_tex < pooled = false; >
@@ -2722,6 +2897,7 @@ sampler2D crt_glow_wide_v_sampler
     MinFilter = LINEAR;
     MipFilter = NONE;
 };
+#endif // CRT_GLOW_WIDE
 
 // Halation blur output -- resolution set by HALATION_RESOLUTION preprocessor
 // HALATION_RESOLUTION=4 -> quarter res (cheapest, may alias on movement)
@@ -3364,9 +3540,7 @@ float recon_weight(float x)
 
 float3 geom_sample_lanczos2(sampler2D tex, float2 tc)
 {
-    float2 px      = ReShade::PixelSize;
-    float2 tc_px   = tc / px;
-    float2 tc_base = floor(tc_px);
+    float2 px = ReShade::PixelSize;
 
     // Tap radius: 2 for Lanczos2/Catmull-Rom (4x4=16 taps),
     //             3 for Lanczos3 (6x6=36 taps)
@@ -3376,17 +3550,41 @@ float3 geom_sample_lanczos2(sampler2D tex, float2 tc)
     const int r = 2;
 #endif
 
+#if PREBLUR_LEGACY_SOFTNESS
+    // Pre-1.3.0 frame: distances measured from texel corners and taps placed
+    // on corners (bilinear then averages 2x2 texels per tap). Bit-exact legacy.
+    float2 t    = tc / px;
+    float2 off  = float2(0.0, 0.0);
+#else
+    // Texel k is centred at (k + 0.5) * px. At an unwarped pixel centre the
+    // fractional offset is 0, so the kernel returns that texel exactly.
+    float2 t    = tc / px - 0.5;
+    float2 off  = float2(0.5, 0.5);
+#endif
+    float2 base = floor(t);
+    float2 fr   = t - base;
+
+    // Separable weights, evaluated once per axis (2r + 2r calls, not 2r*2r + 2r).
+    float wx[6];
+    float wy[6];
+    [unroll]
+    for (int k = 0; k < 2 * r; k++)
+    {
+        wx[k] = recon_weight(fr.x - float(k - r + 1));
+        wy[k] = recon_weight(fr.y - float(k - r + 1));
+    }
+
     float3 result = 0.0;
     float  wsum   = 0.0;
 
-    for (int j = -r + 1; j <= r; j++)
+    [unroll]
+    for (int j = 0; j < 2 * r; j++)
     {
-        float wy = recon_weight(tc_px.y - (tc_base.y + float(j)));
-        for (int i = -r + 1; i <= r; i++)
+        [unroll]
+        for (int i = 0; i < 2 * r; i++)
         {
-            float wx = recon_weight(tc_px.x - (tc_base.x + float(i)));
-            float  w = wx * wy;
-            float2 sample_tc = (tc_base + float2(float(i), float(j))) * px;
+            float  w         = wx[i] * wy[j];
+            float2 sample_tc = (base + float2(float(i - r + 1), float(j - r + 1)) + off) * px;
             result += tex2D(tex, clamp(sample_tc, 0.0, 1.0)).rgb * w;
             wsum   += w;
         }
@@ -3709,58 +3907,95 @@ float3 grain_emulsion(float2 pos, float cell_scale, uint frame_salt, float inten
 // ============================================================
 
 #if ENABLE_PREBLUR
+// Centre tap of the horizontal pre-blur: the source texel itself, or a proper
+// reconstruction at the warped position while the geometry warp is active.
+float3 crt_preblur_centre(float2 texcoord, float2 texcoord_w)
+{
+#if PREBLUR_LEGACY_SOFTNESS || (PREBLUR_RESOLUTION != 1)
+    return geom_sample_lanczos2(ReShade::BackBuffer, texcoord_w);
+#elif ENABLE_GEOMETRY
+    float3 r;
+    [branch]
+    if (crt_geom_mode == 0)
+        r = tex2D(ReShade::BackBuffer, texcoord).rgb;
+    else
+        r = geom_sample_lanczos2(ReShade::BackBuffer, texcoord_w);
+    return r;
+#else
+    return tex2D(ReShade::BackBuffer, texcoord).rgb;
+#endif
+}
+
 void crt_preblur_h_PS(
     in  float4 position : SV_Position,
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
     float2 texcoord_w = geom_warp(texcoord);
+    float3 centre_h   = crt_preblur_centre(texcoord, texcoord_w);
 
     if (crt_preblur_h_sigma < 0.001)
     {
-        color = float4(geom_sample_lanczos2(ReShade::BackBuffer, texcoord_w), 1.0);
+        color = float4(centre_h, 1.0);
         return;
     }
 
-    float3 result = 0.0;
-    float  wsum   = 0.0;
-    float  px     = ReShade::PixelSize.x;
-    int    radius = int(crt_preblur_h_radius);
-
-    float3 centre_h   = geom_sample_lanczos2(ReShade::BackBuffer, texcoord_w);
+    float  px         = ReShade::PixelSize.x;
+    int    radius     = int(crt_preblur_h_radius);
     float3 centre_ycc = crt_rgb_to_ycbcr(centre_h);
     float  centre_Y   = centre_ycc.x;
+    bool   bilat      = crt_preblur_bilateral > 0.001;
+
+    // Incremental Gaussian (GPU Gems 3, ch. 40): w(i) = exp(-i^2 / 2s^2) by
+    // recurrence -- two multiplies per tap instead of an exp(). Taps are taken
+    // in symmetric pairs; the centre tap has weight 1 (spatial and range).
+    // The range (bilateral) exp() is only evaluated when Edge Preservation > 0.
+    float g_w = 1.0;
+    float g_r = exp(-0.5 / (crt_preblur_h_sigma * crt_preblur_h_sigma));
+    float g_b = g_r * g_r;
+    float wsum = 1.0;
+
     if (crt_preblur_luma_only)
     {
         // Blur Y channel only -- chroma from centre pixel preserved
-        // Optional bilateral range weight on luma difference -- preserves edges
-        float  y_result = 0.0;
-        for (int i = -radius; i <= radius; i++)
+        float y_result = centre_Y;
+        for (int i = 1; i <= radius; i++)
         {
-            float3 s   = (i == 0) ? centre_h
-                : tex2D(ReShade::BackBuffer, texcoord_w + float2(float(i)*px, 0.0)).rgb;
-            float  sY  = crt_rgb_to_ycbcr(s).x;
-            float  ws  = gauss(float(i), crt_preblur_h_sigma);
-            float  wr  = lerp(1.0, gauss(sY - centre_Y, 0.10), crt_preblur_bilateral);
-            float  w   = ws * wr;
-            y_result  += sY * w;
-            wsum      += w;
+            g_w *= g_r; g_r *= g_b;
+            float2 o  = float2(float(i) * px, 0.0);
+            float  yl = crt_rgb_to_ycbcr(tex2D(ReShade::BackBuffer, texcoord_w - o).rgb).x;
+            float  yr = crt_rgb_to_ycbcr(tex2D(ReShade::BackBuffer, texcoord_w + o).rgb).x;
+            float  wl = g_w;
+            float  wr = g_w;
+            if (bilat)
+            {
+                wl *= lerp(1.0, gauss(yl - centre_Y, 0.10), crt_preblur_bilateral);
+                wr *= lerp(1.0, gauss(yr - centre_Y, 0.10), crt_preblur_bilateral);
+            }
+            y_result += yl * wl + yr * wr;
+            wsum     += wl + wr;
         }
         color = float4(crt_ycbcr_to_rgb(float3(y_result / max(wsum, 1e-5),
                                                 centre_ycc.y, centre_ycc.z)), 1.0);
     }
     else
     {
-        for (int i = -radius; i <= radius; i++)
+        float3 result = centre_h;
+        for (int i = 1; i <= radius; i++)
         {
-            float3 s   = (i == 0) ? centre_h
-                : tex2D(ReShade::BackBuffer, texcoord_w + float2(float(i)*px, 0.0)).rgb;
-            float  sY  = crt_rgb_to_ycbcr(s).x;
-            float  ws  = gauss(float(i), crt_preblur_h_sigma);
-            float  wr  = lerp(1.0, gauss(sY - centre_Y, 0.10), crt_preblur_bilateral);
-            float  w   = ws * wr;
-            result    += s * w;
-            wsum      += w;
+            g_w *= g_r; g_r *= g_b;
+            float2 o  = float2(float(i) * px, 0.0);
+            float3 sl = tex2D(ReShade::BackBuffer, texcoord_w - o).rgb;
+            float3 sr = tex2D(ReShade::BackBuffer, texcoord_w + o).rgb;
+            float  wl = g_w;
+            float  wr = g_w;
+            if (bilat)
+            {
+                wl *= lerp(1.0, gauss(crt_rgb_to_ycbcr(sl).x - centre_Y, 0.10), crt_preblur_bilateral);
+                wr *= lerp(1.0, gauss(crt_rgb_to_ycbcr(sr).x - centre_Y, 0.10), crt_preblur_bilateral);
+            }
+            result += sl * wl + sr * wr;
+            wsum   += wl + wr;
         }
         color = float4(result / max(wsum, 1e-5), 1.0);
     }
@@ -3785,42 +4020,59 @@ void crt_preblur_v_PS(
         return;
     }
 
-    float3 result = 0.0;
-    float  wsum   = 0.0;
-    float  py     = ReShade::PixelSize.y * float(PREBLUR_RESOLUTION);
-    int    radius = int(crt_preblur_v_radius);
-
-    float3 centre_v   = tex2D(crt_preblur_h_sampler, texcoord).rgb;
+    float  py           = ReShade::PixelSize.y * float(PREBLUR_RESOLUTION);
+    int    radius       = int(crt_preblur_v_radius);
+    float3 centre_v     = tex2D(crt_preblur_h_sampler, texcoord).rgb;
     float3 centre_ycc_v = crt_rgb_to_ycbcr(centre_v);
-    float  centre_Yv  = centre_ycc_v.x;
+    float  centre_Yv    = centre_ycc_v.x;
+    bool   bilat        = crt_preblur_bilateral > 0.001;
+
+    // Incremental Gaussian, symmetric pairs (see the horizontal pass).
+    float g_w = 1.0;
+    float g_r = exp(-0.5 / (crt_preblur_v_sigma * crt_preblur_v_sigma));
+    float g_b = g_r * g_r;
+    float wsum = 1.0;
+
     if (crt_preblur_luma_only)
     {
-        // Blur Y channel only -- bilateral range weight optional
-        float  y_result = 0.0;
-        for (int j = -radius; j <= radius; j++)
+        float y_result = centre_Yv;
+        for (int j = 1; j <= radius; j++)
         {
-            float3 s   = tex2D(crt_preblur_h_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
-            float  sY  = crt_rgb_to_ycbcr(s).x;
-            float  ws  = gauss(float(j), crt_preblur_v_sigma);
-            float  wr  = lerp(1.0, gauss(sY - centre_Yv, 0.10), crt_preblur_bilateral);
-            float  w   = ws * wr;
-            y_result  += sY * w;
-            wsum      += w;
+            g_w *= g_r; g_r *= g_b;
+            float2 o  = float2(0.0, float(j) * py);
+            float  yu = crt_rgb_to_ycbcr(tex2D(crt_preblur_h_sampler, texcoord - o).rgb).x;
+            float  yd = crt_rgb_to_ycbcr(tex2D(crt_preblur_h_sampler, texcoord + o).rgb).x;
+            float  wu = g_w;
+            float  wd = g_w;
+            if (bilat)
+            {
+                wu *= lerp(1.0, gauss(yu - centre_Yv, 0.10), crt_preblur_bilateral);
+                wd *= lerp(1.0, gauss(yd - centre_Yv, 0.10), crt_preblur_bilateral);
+            }
+            y_result += yu * wu + yd * wd;
+            wsum     += wu + wd;
         }
         color = float4(crt_ycbcr_to_rgb(float3(y_result / max(wsum, 1e-5),
                                                 centre_ycc_v.y, centre_ycc_v.z)), 1.0);
     }
     else
     {
-        for (int j = -radius; j <= radius; j++)
+        float3 result = centre_v;
+        for (int j = 1; j <= radius; j++)
         {
-            float3 s   = tex2D(crt_preblur_h_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
-            float  sY  = crt_rgb_to_ycbcr(s).x;
-            float  ws  = gauss(float(j), crt_preblur_v_sigma);
-            float  wr  = lerp(1.0, gauss(sY - centre_Yv, 0.10), crt_preblur_bilateral);
-            float  w   = ws * wr;
-            result    += s * w;
-            wsum      += w;
+            g_w *= g_r; g_r *= g_b;
+            float2 o  = float2(0.0, float(j) * py);
+            float3 su = tex2D(crt_preblur_h_sampler, texcoord - o).rgb;
+            float3 sd = tex2D(crt_preblur_h_sampler, texcoord + o).rgb;
+            float  wu = g_w;
+            float  wd = g_w;
+            if (bilat)
+            {
+                wu *= lerp(1.0, gauss(crt_rgb_to_ycbcr(su).x - centre_Yv, 0.10), crt_preblur_bilateral);
+                wd *= lerp(1.0, gauss(crt_rgb_to_ycbcr(sd).x - centre_Yv, 0.10), crt_preblur_bilateral);
+            }
+            result += su * wu + sd * wd;
+            wsum   += wu + wd;
         }
         color = float4(result / max(wsum, 1e-5), 1.0);
     }
@@ -3835,45 +4087,61 @@ void crt_preblur_v_PS(
 // ============================================================
 
 #if ENABLE_HALATION
+// One halation source tap: bright-only, optionally warm-tinted.
+float3 crt_halation_tap(float2 uv)
+{
+    #if ENABLE_PREBLUR
+    float3 s = tex2D(crt_preblur_v_sampler, uv).rgb;
+    #else
+    float3 s = tex2D(ReShade::BackBuffer, uv).rgb;
+    #endif
+    float luma  = dot(s, float3(0.2126, 0.7152, 0.0722));
+    float above = max(luma - crt_halation_threshold, 0.0);
+    // Warm target: lerp between neutral white and warm orange-red.
+    // crt_halation_warmth=0 -> (1,1,1)*luma (neutral white desaturation)
+    // crt_halation_warmth=1 -> (1.08,0.95,0.82)*luma (warm CRT phosphor tint)
+    float3 warm_tint = lerp(float3(1.0, 1.0, 1.0),
+                            float3(1.08, 0.95, 0.82),
+                            crt_halation_warmth) * luma;
+    return lerp(s, warm_tint, crt_halation_saturation) * (above / max(luma, 0.0001));
+}
+
 void crt_halation_PS(
     in  float4 position : SV_Position,
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float3 result = 0.0;
-    float  wsum   = 0.0;
-    // Pixel size scaled by resolution divisor
-    float  px     = ReShade::PixelSize.x * float(HALATION_RESOLUTION);
-    int    radius = int(crt_halation_radius);
+    // Off: nothing samples the halation textures -- skip the work and the write.
+    if (crt_halation_strength < 0.001)
+        discard;
 
-    for (int i = -radius; i <= radius; i++)
+    int radius = int(crt_halation_radius);
+    #if ENABLE_PREBLUR
+    float2 base = texcoord;
+    float2 step = float2(ReShade::PixelSize.x * float(HALATION_RESOLUTION), 0.0);
+    #elif ENABLE_GEOMETRY
+    float2 base = geom_warp(texcoord);
+    float2 step = float2(ReShade::PixelSize.x, 0.0);
+    #else
+    float2 base = texcoord;
+    float2 step = float2(ReShade::PixelSize.x, 0.0);
+    #endif
+
+    // sigma_h = sigma * anisotropy -- wider H spread when anisotropy > 1.
+    // Incremental Gaussian, symmetric pairs (see pre-blur).
+    float sigma = crt_halation_sigma * max(crt_halation_anisotropy, 0.01);
+    float g_w = 1.0;
+    float g_r = exp(-0.5 / (sigma * sigma));
+    float g_b = g_r * g_r;
+
+    float3 result = crt_halation_tap(base);
+    float  wsum   = 1.0;
+    for (int i = 1; i <= radius; i++)
     {
-        #if ENABLE_PREBLUR
-        float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
-        #elif ENABLE_GEOMETRY
-        float  px_bb = ReShade::PixelSize.x;
-        float2 uv_hal = geom_warp(texcoord) + float2(float(i)*px_bb, 0.0);
-        float3 s = tex2D(ReShade::BackBuffer, uv_hal).rgb;
-        #else
-        float  px_bb = ReShade::PixelSize.x;
-        float2 uv_hal = texcoord + float2(float(i)*px_bb, 0.0);
-        float3 s = tex2D(ReShade::BackBuffer, uv_hal).rgb;
-        #endif
-
-        float luma  = dot(s, float3(0.2126, 0.7152, 0.0722));
-        float above = max(luma - crt_halation_threshold, 0.0);
-        // Warm target: lerp between neutral white and warm orange-red.
-        // crt_halation_warmth=0 -> (1,1,1)*luma (neutral white desaturation)
-        // crt_halation_warmth=1 -> (1.08,0.95,0.82)*luma (warm CRT phosphor tint)
-        float3 warm_tint = lerp(float3(1.0, 1.0, 1.0),
-                                float3(1.08, 0.95, 0.82),
-                                crt_halation_warmth) * luma;
-        s = lerp(s, warm_tint, crt_halation_saturation) * (above / max(luma, 0.0001));
-
-        // sigma_h = sigma * anisotropy -- wider H spread when anisotropy > 1
-        float w = gauss(float(i), crt_halation_sigma * max(crt_halation_anisotropy, 0.01));
-        result += s * w;
-        wsum   += w;
+        g_w *= g_r; g_r *= g_b;
+        float2 o = step * float(i);
+        result += (crt_halation_tap(base - o) + crt_halation_tap(base + o)) * g_w;
+        wsum   += 2.0 * g_w;
     }
 
     color = float4(result / max(wsum, 1e-5), 1.0);
@@ -3887,18 +4155,25 @@ void crt_halation_v_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float3 result = 0.0;
-    float  wsum   = 0.0;
-    float  py     = ReShade::PixelSize.y * float(HALATION_RESOLUTION);
-    int    radius = int(crt_halation_radius);
-    float  sigma_v = crt_halation_sigma / max(crt_halation_anisotropy, 0.01);
+    if (crt_halation_strength < 0.001)
+        discard;
 
-    for (int j = -radius; j <= radius; j++)
+    float py      = ReShade::PixelSize.y * float(HALATION_RESOLUTION);
+    int   radius  = int(crt_halation_radius);
+    float sigma_v = crt_halation_sigma / max(crt_halation_anisotropy, 0.01);
+    float g_w = 1.0;
+    float g_r = exp(-0.5 / (sigma_v * sigma_v));
+    float g_b = g_r * g_r;
+
+    float3 result = tex2D(crt_halation_sampler, texcoord).rgb;
+    float  wsum   = 1.0;
+    for (int j = 1; j <= radius; j++)
     {
-        float3 s = tex2D(crt_halation_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
-        float w = gauss(float(j), sigma_v);
-        result += s * w;
-        wsum   += w;
+        g_w *= g_r; g_r *= g_b;
+        float2 o = float2(0.0, float(j) * py);
+        result += (tex2D(crt_halation_sampler, texcoord - o).rgb +
+                   tex2D(crt_halation_sampler, texcoord + o).rgb) * g_w;
+        wsum   += 2.0 * g_w;
     }
     color = float4(result / max(wsum, 1e-5), 1.0);
 }
@@ -3907,15 +4182,46 @@ void crt_halation_v_PS(
 // ============================================================
 // Pass 4: Glow horizontal blur
 // Samples pre-blurred signal for luminance-weighted glow.
+// Gaussian weights use the incremental recurrence (see pre-blur): one exp()
+// per channel per pixel instead of one per tap per channel.
 // ============================================================
+
+#if ENABLE_GLOW
+float3 crt_glow_src(float2 uv)
+{
+    #if ENABLE_PREBLUR
+    return tex2D(crt_preblur_v_sampler, uv).rgb;
+    #else
+    return tex2D(ReShade::BackBuffer, uv).rgb;
+    #endif
+}
+
+// Threshold / knee gate shared by both tight-glow passes.
+float3 crt_glow_gate(float3 s)
+{
+    float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
+    float gate;
+    if (crt_glow_knee < 0.001)
+        gate = float(lum > crt_glow_threshold);
+    else
+    {
+        float t = saturate((lum - crt_glow_threshold) / crt_glow_knee);
+        gate = t * t * (3.0 - 2.0 * t);
+    }
+    return max(s - crt_glow_threshold, 0.0) * lum * gate;
+}
 
 void crt_glow_h_PS(
     in  float4 position : SV_Position,
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float  px     = ReShade::PixelSize.x * float(PREBLUR_RESOLUTION);
-    int    radius = min(int(crt_glow_h_radius), GLOW_H_MAX_RADIUS);
+    // Off: the main pass does not sample the tight glow -- skip it entirely.
+    if (crt_glow_strength < 0.001)
+        discard;
+
+    float  px         = ReShade::PixelSize.x * float(PREBLUR_RESOLUTION);
+    int    radius     = min(int(crt_glow_h_radius), GLOW_H_MAX_RADIUS);
     float  sigma_base = crt_glow_sigma * crt_glow_h_radius * 0.25;
 
     // Spectral bloom: per-channel sigma based on wavelength-dependent diffraction.
@@ -3924,40 +4230,31 @@ void crt_glow_h_PS(
     float3 sigma_rgb = sigma_base * lerp(float3(1.0, 1.0, 1.0),
                                          float3(0.75, 1.0, 1.35),
                                          crt_glow_spectral);
+    #if !ENABLE_PREBLUR && ENABLE_GEOMETRY
+    float2 base = geom_warp(texcoord);
+    #else
+    float2 base = texcoord;
+    #endif
 
-    float3 result  = 0.0;
-    float3 wsum_rgb = 0.0;
+    float3 g_w = float3(1.0, 1.0, 1.0);
+    float3 g_r = exp(-0.5 / (sigma_rgb * sigma_rgb));
+    float3 g_b = g_r * g_r;
+
+    float3 result   = crt_glow_gate(crt_glow_src(base));
+    float3 wsum_rgb = float3(1.0, 1.0, 1.0);
 
     [unroll]
-    for (int i = -GLOW_H_MAX_RADIUS; i <= GLOW_H_MAX_RADIUS; i++)
+    for (int i = 1; i <= GLOW_H_MAX_RADIUS; i++)
     {
-        // Per-channel Gaussian weight -- zero for taps outside radius
-        float3 w = (abs(i) <= radius)
-                 ? float3(gauss(float(i), sigma_rgb.r),
-                          gauss(float(i), sigma_rgb.g),
-                          gauss(float(i), sigma_rgb.b))
-                 : float3(0.0, 0.0, 0.0);
-
-        #if ENABLE_PREBLUR
-        float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
-        #elif ENABLE_GEOMETRY
-        float2 uv_glow = geom_warp(texcoord) + float2(float(i)*px, 0.0);
-        float3 s = tex2D(ReShade::BackBuffer, uv_glow).rgb;
-        #else
-        float2 uv_glow = texcoord + float2(float(i)*px, 0.0);
-        float3 s = tex2D(ReShade::BackBuffer, uv_glow).rgb;
-        #endif
-        float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
-        float gate;
-        if (crt_glow_knee < 0.001)
-            gate = float(lum > crt_glow_threshold);
-        else
-            { float t = saturate((lum - crt_glow_threshold) / crt_glow_knee);
-              gate = t * t * (3.0 - 2.0 * t); }
-        s = max(s - crt_glow_threshold, 0.0) * lum * gate;
-
-        result   += s * w;
-        wsum_rgb += w;
+        [branch]
+        if (i <= radius)
+        {
+            g_w *= g_r; g_r *= g_b;
+            float2 o = float2(float(i) * px, 0.0);
+            result   += (crt_glow_gate(crt_glow_src(base - o)) +
+                         crt_glow_gate(crt_glow_src(base + o))) * g_w;
+            wsum_rgb += 2.0 * g_w;
+        }
     }
 
     float3 g = result / max(wsum_rgb, 1e-5);
@@ -3976,43 +4273,43 @@ void crt_glow_v_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    if (crt_glow_strength < 0.001)
+        discard;
+
     float3 h_glow = tex2D(crt_glow_sampler, texcoord).rgb;
 
-    if (crt_glow_strength < 0.001)
-    {
-        color = float4(h_glow, 1.0);
-        return;
-    }
-
-    float3 v_glow = 0.0;
-    float  vwsum  = 0.0;
-    float  py     = ReShade::PixelSize.y * float(PREBLUR_RESOLUTION);
+    #if ENABLE_PREBLUR
+    float  py   = ReShade::PixelSize.y * float(PREBLUR_RESOLUTION);
+    float2 base = texcoord;
+    #elif ENABLE_GEOMETRY
+    float  py   = ReShade::PixelSize.y;
+    float2 base = geom_warp(texcoord);
+    #else
+    float  py   = ReShade::PixelSize.y;
+    float2 base = texcoord;
+    #endif
     int    vrad   = min(int(crt_glow_v_radius), GLOW_V_MAX_RADIUS);
     float  vsigma = crt_glow_sigma * crt_glow_v_radius * 0.5;
 
+    float g_w = 1.0;
+    float g_r = exp(-0.5 / (vsigma * vsigma));
+    float g_b = g_r * g_r;
+
+    float3 v_glow = crt_glow_gate(crt_glow_src(base));
+    float  vwsum  = 1.0;
+
     [unroll]
-    for (int j = -GLOW_V_MAX_RADIUS; j <= GLOW_V_MAX_RADIUS; j++)
+    for (int j = 1; j <= GLOW_V_MAX_RADIUS; j++)
     {
-        float w = (abs(j) <= vrad) ? gauss(float(j), vsigma) : 0.0;
-        #if ENABLE_PREBLUR
-        float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
-        #elif ENABLE_GEOMETRY
-        float  py_bb = ReShade::PixelSize.y;
-        float3 s = tex2D(ReShade::BackBuffer, geom_warp(texcoord) + float2(0.0, float(j)*py_bb)).rgb;
-        #else
-        float  py_bb = ReShade::PixelSize.y;
-        float3 s = tex2D(ReShade::BackBuffer, texcoord + float2(0.0, float(j)*py_bb)).rgb;
-        #endif
-        float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
-        float gate_v;
-        if (crt_glow_knee < 0.001)
-            gate_v = float(lum > crt_glow_threshold);
-        else
-            { float t = saturate((lum - crt_glow_threshold) / crt_glow_knee);
-              gate_v = t * t * (3.0 - 2.0 * t); }
-        s = max(s - crt_glow_threshold, 0.0) * lum * gate_v;
-        v_glow += s * w;
-        vwsum  += w;
+        [branch]
+        if (j <= vrad)
+        {
+            g_w *= g_r; g_r *= g_b;
+            float2 o = float2(0.0, float(j) * py);
+            v_glow += (crt_glow_gate(crt_glow_src(base - o)) +
+                       crt_glow_gate(crt_glow_src(base + o))) * g_w;
+            vwsum  += 2.0 * g_w;
+        }
     }
     v_glow /= max(vwsum, 1e-5);
     v_glow = balance_glow(v_glow, crt_glow_balance);
@@ -4020,10 +4317,26 @@ void crt_glow_v_PS(
     float3 glow = lerp(v_glow, h_glow, crt_glow_h_mix);
     color = float4(glow, 1.0);
 }
+#endif // ENABLE_GLOW
 
 // ============================================================
 // Wide glow H pass: large-area bloom at quarter resolution
+// (also the source for Screen Reflection and Tube Diffuse -- when Wide Glow
+// Strength is 0 it writes black, which those effects rely on)
 // ============================================================
+
+#if CRT_GLOW_WIDE
+float3 crt_glow_wide_tap(float2 uv)
+{
+    #if ENABLE_PREBLUR
+    float3 s = tex2D(crt_preblur_v_sampler, uv).rgb;
+    #else
+    float3 s = tex2D(ReShade::BackBuffer, uv).rgb;
+    #endif
+    float lum  = dot(s, float3(0.2126, 0.7152, 0.0722));
+    float gate = float(lum > crt_glow_wide_threshold);
+    return max(s - crt_glow_wide_threshold, 0.0) * lum * gate;
+}
 
 void crt_glow_wide_h_PS(
     in  float4 position : SV_Position,
@@ -4035,23 +4348,24 @@ void crt_glow_wide_h_PS(
     float  px     = ReShade::PixelSize.x * float(GLOW_RESOLUTION * 2);
     int    radius = min(int(crt_glow_wide_radius), GLOW_H_MAX_RADIUS);
     float  sigma  = crt_glow_sigma * crt_glow_wide_radius * 0.5;
-    float3 result = 0.0;
-    float  wsum   = 0.0;
+    float  g_w = 1.0;
+    float  g_r = exp(-0.5 / (sigma * sigma));
+    float  g_b = g_r * g_r;
+
+    float3 result = crt_glow_wide_tap(texcoord);
+    float  wsum   = 1.0;
 
     [unroll]
-    for (int i = -GLOW_H_MAX_RADIUS; i <= GLOW_H_MAX_RADIUS; i++)
+    for (int i = 1; i <= GLOW_H_MAX_RADIUS; i++)
     {
-        float w = (abs(i) <= radius) ? gauss(float(i), sigma) : 0.0;
-        #if ENABLE_PREBLUR
-        float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(float(i)*px, 0.0)).rgb;
-        #else
-        float3 s = tex2D(ReShade::BackBuffer, texcoord + float2(float(i)*px, 0.0)).rgb;
-        #endif
-        float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
-        float gate = float(lum > crt_glow_wide_threshold);
-        s = max(s - crt_glow_wide_threshold, 0.0) * lum * gate;
-        result += s * w;
-        wsum   += w;
+        [branch]
+        if (i <= radius)
+        {
+            g_w *= g_r; g_r *= g_b;
+            float2 o = float2(float(i) * px, 0.0);
+            result += (crt_glow_wide_tap(texcoord - o) + crt_glow_wide_tap(texcoord + o)) * g_w;
+            wsum   += 2.0 * g_w;
+        }
     }
     color = float4(result / max(wsum, 1e-5), 1.0);
 }
@@ -4067,23 +4381,24 @@ void crt_glow_wide_v_PS(
     float  py     = ReShade::PixelSize.y * float(GLOW_RESOLUTION * 2);
     int    vrad   = min(int(crt_glow_wide_radius), GLOW_V_MAX_RADIUS);
     float  vsigma = crt_glow_sigma * crt_glow_wide_radius * 0.5;
-    float3 result = 0.0;
-    float  wsum   = 0.0;
+    float  g_w = 1.0;
+    float  g_r = exp(-0.5 / (vsigma * vsigma));
+    float  g_b = g_r * g_r;
+
+    float3 result = crt_glow_wide_tap(texcoord);
+    float  wsum   = 1.0;
 
     [unroll]
-    for (int j = -GLOW_V_MAX_RADIUS; j <= GLOW_V_MAX_RADIUS; j++)
+    for (int j = 1; j <= GLOW_V_MAX_RADIUS; j++)
     {
-        float w = (abs(j) <= vrad) ? gauss(float(j), vsigma) : 0.0;
-        #if ENABLE_PREBLUR
-        float3 s = tex2D(crt_preblur_v_sampler, texcoord + float2(0.0, float(j)*py)).rgb;
-        #else
-        float3 s = tex2D(ReShade::BackBuffer, texcoord + float2(0.0, float(j)*py)).rgb;
-        #endif
-        float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
-        float gate = float(lum > crt_glow_wide_threshold);
-        s = max(s - crt_glow_wide_threshold, 0.0) * lum * gate;
-        result += s * w;
-        wsum   += w;
+        [branch]
+        if (j <= vrad)
+        {
+            g_w *= g_r; g_r *= g_b;
+            float2 o = float2(0.0, float(j) * py);
+            result += (crt_glow_wide_tap(texcoord - o) + crt_glow_wide_tap(texcoord + o)) * g_w;
+            wsum   += 2.0 * g_w;
+        }
     }
 
     // Sample wide H glow and combine
@@ -4093,6 +4408,7 @@ void crt_glow_wide_v_PS(
     wide = balance_glow(wide, crt_glow_balance);
     color = float4(wide, 1.0);
 }
+#endif // CRT_GLOW_WIDE
 
 // ============================================================
 // Pass 5: Main CRT pass
@@ -4832,6 +5148,7 @@ void crt_main_PS(
 
 
     // -- Glow (tight + wide dual-scale bloom) --
+    #if ENABLE_GLOW
     if (crt_glow_strength > 0.001 || crt_glow_wide_strength > 0.001)
     {
         float2 glow_uv = texcoord;
@@ -4846,6 +5163,7 @@ void crt_main_PS(
             c += crt_glow_wide_strength * wide_glow;
         }
     }
+    #endif // ENABLE_GLOW
 
     color = float4(c, 1.0);
 }
@@ -4864,11 +5182,9 @@ void crt_edge_blur_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
     if (crt_edge_blur_strength < 0.001)
-    {
-        color = tex2D(ReShade::BackBuffer, texcoord);
-        return;
-    }
+        discard;
 
     // Distance from centre [0, ~0.707 at corner]
     float2 uv_c     = texcoord - 0.5;
@@ -4912,20 +5228,22 @@ void crt_edge_blur_PS(
 
 #if ENABLE_GRAIN
 // ============================================================
-// Grain pass (merged): Snapshot + delta in one dual-output pass
-// Output 0 -> crt_pregrain_tex (clean snapshot)
-// Output 1 -> crt_grain_raw_tex (grain delta)
-// Saves one full-res pass vs separate snapshot + raw passes.
+// Grain pass 1: grain delta -> crt_grain_raw_tex
+// Writes only the delta. The clean image is not copied anywhere: this pass
+// renders to a texture, so the back buffer still holds it when GrainDiffuse
+// runs (1.2.x wrote a full-resolution RGBA16F snapshot for that every frame).
 // ============================================================
 
 void crt_grain_merged_PS(
     in  float4 position  : SV_Position,
     in  float2 texcoord  : TEXCOORD0,
-    out float4 out_clean : SV_Target0,
-    out float4 out_delta : SV_Target1)
+    out float4 out_delta : SV_Target)
 {
+    // Off: GrainDiffuse discards too, so the delta is never read.
+    if (crt_grain_intensity <= 0.001)
+        discard;
+
     float3 c  = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    out_clean = float4(c, 1.0);
     float3 delta = float3(0.5, 0.5, 0.5);
 
     if (crt_grain_intensity > 0.001)
@@ -5055,13 +5373,13 @@ void crt_grain_diffuse_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float3 clean = tex2D(crt_pregrain_samp, texcoord).rgb;
+    // Off: leave the back buffer as it is (same threshold as GrainMerged).
+    if (crt_grain_intensity <= 0.001)
+        discard;
 
-    if (crt_grain_intensity < 0.001)
-    {
-        color = float4(clean, 1.0);
-        return;
-    }
+    // Clean image: GrainMerged renders to a texture, so the back buffer still
+    // holds exactly what it read.
+    float3 clean = tex2D(ReShade::BackBuffer, texcoord).rgb;
 
     float2 px = ReShade::PixelSize;
     float2 fc = texcoord * float2(BUFFER_WIDTH, BUFFER_HEIGHT);
@@ -5125,11 +5443,9 @@ void crt_soften_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
     if (crt_soften_strength < 0.001)
-    {
-        color = tex2D(ReShade::BackBuffer, texcoord);
-        return;
-    }
+        discard;
     float py    = ReShade::PixelSize.y;
     float sigma = crt_soften_strength * 0.8;
 
@@ -5166,11 +5482,9 @@ void crt_sharpen_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
     if (crt_sharpen_strength < 0.001)
-    {
-        color = tex2D(ReShade::BackBuffer, texcoord);
-        return;
-    }
+        discard;
     float2 px = ReShade::PixelSize;
 
     float3 c  = tex2D(ReShade::BackBuffer, texcoord).rgb;
@@ -5222,10 +5536,10 @@ void crt_motion_sharpen_PS(
     float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
 
     // Motion magnitude: luma difference between current and previous frame.
-    // prev1_tex holds the pre-decay raw frame from last frame's store pass.
-    // If ENABLE_DECAY is off, prev1 is uninitialised -- guard with the define.
+    // The decay history holds last frame's pre-decay image (ping-pong pair).
+    // If ENABLE_DECAY is off there is no history -- guard with the define.
     #if ENABLE_DECAY
-    float3 prev     = tex2D(crt_decay_prev1_sampler, texcoord).rgb;
+    float3 prev     = crt_decay_prev_frame(texcoord);
     float  luma_c   = dot(c,    float3(0.2126, 0.7152, 0.0722));
     float  luma_p   = dot(prev, float3(0.2126, 0.7152, 0.0722));
     float  motion   = saturate((abs(luma_c - luma_p) - crt_msharpen_motion_threshold)
@@ -5238,10 +5552,7 @@ void crt_motion_sharpen_PS(
     float effective_strength = crt_msharpen_strength * motion;
 
     if (effective_strength < 0.001)
-    {
-        color = float4(c, 1.0);
-        return;
-    }
+        discard; // pixel unchanged -- skip the write
 
     float3 n = tex2D(ReShade::BackBuffer, texcoord + float2( 0.0, -px.y)).rgb;
     float3 s = tex2D(ReShade::BackBuffer, texcoord + float2( 0.0,  px.y)).rgb;
@@ -5273,19 +5584,17 @@ void crt_persistence_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float3 current = tex2D(ReShade::BackBuffer, texcoord).rgb;
-
     // Skip when the effect is fully off. This must consider the per-channel
     // R/G/B sliders as well as the master strength: gating on strength alone
     // made the per-channel controls dead unless strength was also raised.
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
     float max_persist = max(crt_persistence_strength,
                         max(crt_persistence_r,
                         max(crt_persistence_g, crt_persistence_b)));
     if (max_persist < 0.001)
-    {
-        color = float4(current, 1.0);
-        return;
-    }
+        discard;
+
+    float3 current = tex2D(ReShade::BackBuffer, texcoord).rgb;
 
     // Sample from above -- the phosphor trail appears below the beam
     // The beam scans top to bottom, so pixels above were lit slightly earlier
@@ -5448,10 +5757,10 @@ void crt_geometry_PS(
 // Fibonacci sequence for decay weighting
 static const float kFib[8] = { 1.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0 };
 
-// Variable MPRT sRGB helpers (SDR path only)
-// Uses hardcoded sRGB standard (gamma 2.4 / IEC 61966-2-1).
-// No user-exposed gamma slider -- the sRGB transfer function is not a free parameter;
-// changing it breaks the brightness-budget math.
+// sRGB transfer (gamma 2.4 / IEC 61966-2-1). Used as the display-linear
+// decode/encode of the SDR pipeline and as the encoded-domain exponent of the
+// Fibonacci decay. Not a free parameter: changing it changes what
+// "gain x2 = twice the light" means.
 static const float kDecayGamma = 2.4;
 float bb_srgb2linear(float c)
 {
@@ -5475,9 +5784,91 @@ float3 bb_linear2srgb(float3 c)
 }
 
 // Phase store: write raw cycle index as a normalised float in [0,1].
-// Encoding: index / (MAX_FRAMES - 1) so R8 precision covers 2..8 frames cleanly.
 // MAX_FRAMES must match the ui_max of crt_decay_frames (8).
 #define DECAY_MAX_FRAMES 8
+
+static const float3 kDecayLuma = float3(0.2126, 0.7152, 0.0722);
+
+// ============================================================
+// Display-linear transfer for the decay pass (1.3.0)
+// ------------------------------------------------------------
+// BFI / Variable MPRT gain is applied to the light the panel will actually
+// emit. For every pipeline the decode below is exactly the transform the
+// signal would otherwise receive at the end of the chain, so a gain of 1.0 is
+// a passthrough and a gain of 2.0 doubles emitted light -- nothing else moves.
+//   PIPELINE 0                     sRGB EOTF             ceiling 1.0 (SDR white)
+//   PIPELINE 0 + LINEAR_HDR_INPUT  identity (raw scRGB)  ceiling LINEAR_HDR_PEAK_NITS/80
+//   PIPELINE 1                     Soop After transform  ceiling Display Peak/80
+//   PIPELINE 2                     Soop After minus PQ   ceiling Display Peak, same units
+// Up to 1.2.3 Pipeline 1 decoded with the simple inverse Reinhard but
+// re-encoded with the extended (peak-white) Reinhard. The two are not inverses,
+// so even at gain 0.5 lit frames inflated highlights (800 -> 1123 nits instead
+// of 931 at a 1400-nit peak) and clipped them per channel. Pipeline 2 ran the
+// Pipeline 1 functions on its sRGB-encoded signal, and raw scRGB was decoded as
+// sRGB and clamped at 80 nits.
+// With PIPELINE >= 1 this pass also performs the Soop After step (the separate
+// SoopAfter pass is not compiled when ENABLE_DECAY=1), so its output is the
+// final scRGB / PQ signal.
+// ============================================================
+float3 crt_decay_decode(float3 c)
+{
+#if PIPELINE == 1
+    return soop_inv_reinhard(c, crt_soop_shadow_gamma);
+#elif PIPELINE == 2
+    // 0.9999 cap: same PQ output as the uncapped inverse (the PQ encode
+    // saturates long before), but keeps the gain maths finite.
+    float3 r = min(soop_srgb_to_linear(max(c, 0.0)), 0.9999);
+    return r / (1.0 - r);
+#elif LINEAR_HDR_INPUT
+    return max(c, 0.0);
+#else
+    return bb_srgb2linear(max(c, 0.0));
+#endif
+}
+
+// Display-linear -> what the decay pass writes.
+float3 crt_decay_output(float3 lin)
+{
+#if PIPELINE == 1
+    return max(lin, 0.0);
+#elif PIPELINE == 2
+    return soop_linear_to_pq(max(lin, 0.0), crt_soop_hdr10_peak_nits);
+#elif LINEAR_HDR_INPUT
+    return max(lin, 0.0);
+#else
+    return saturate(bb_linear2srgb(max(lin, 0.0)));
+#endif
+}
+
+// Passthrough (startup gate, skipped duty cycles, spike frames, Fibonacci
+// frame 0). Pipeline 0 keeps the untouched signal; Pipeline 1/2 only apply the
+// folded-in Soop After step.
+float3 crt_decay_passthrough(float3 c)
+{
+#if PIPELINE >= 1
+    return crt_decay_output(crt_decay_decode(c));
+#else
+    return c;
+#endif
+}
+
+// Panel ceiling -- the most light one sub-frame may emit -- in the
+// display-linear units of crt_decay_decode().
+float crt_decay_ceiling()
+{
+#if PIPELINE == 1
+    return crt_soop_peak_nits / 80.0;
+#elif PIPELINE == 2
+    // soop_linear_to_pq emits x * 0.003789 * content_peak * 125 nits.
+    return crt_soop_peak_nits / (0.473625 * crt_soop_hdr10_peak_nits);
+#elif LINEAR_HDR_INPUT
+    return float(LINEAR_HDR_PEAK_NITS) / 80.0;
+#else
+    return 1.0;
+#endif
+}
+
+#if DECAY_AUTO_RESYNC
 // Shared luma sampler for monitor -- samples post-decay backbuffer at 9 points.
 float crt_decay_sample_luma()
 {
@@ -5531,6 +5922,8 @@ void crt_decay_luma_dark_PS(
         color = float4(prev, 0.0, 0.0, 1.0); // preserve
 }
 
+#endif // DECAY_AUTO_RESYNC
+
 void crt_decay_phase_store_PS(
     in  float4 position : SV_Position,
     in  float2 texcoord : TEXCOORD0,
@@ -5542,6 +5935,7 @@ void crt_decay_phase_store_PS(
     // If dark_avg > 40% of lit_avg the phase has flipped -- add 1 to correct.
     // Only meaningful for 2-frame BFI where lit/dark distinction is cleanest.
     int auto_offset = 0;
+#if DECAY_AUTO_RESYNC
     if (crt_decay_auto_resync && frames == 2)
     {
         float lit_avg  = tex2D(crt_decay_luma_lit_sampler,  float2(0.5, 0.5)).r;
@@ -5549,6 +5943,7 @@ void crt_decay_phase_store_PS(
         if (lit_avg > 0.01 && dark_avg > lit_avg * 0.40)
             auto_offset = 1;
     }
+#endif
 
     int phase_offset = (crt_decay_fg_phase ? 1 : 0) + FRAMEGEN_PHASE_OFFSET + auto_offset;
     int idx          = (int(FRAMECOUNT) + phase_offset) % frames;
@@ -5566,56 +5961,374 @@ void crt_decay_phase_store_PS(
     color = float4(float(idx) / 255.0, duty_active, 0.0, 1.0);
 }
 
-// Raw game frame store: captures backbuffer before decay modifies it.
-// Must run as the FIRST decay pass -- before prev1/prev2 stores and the decay PS.
-// Merged decay history store: three full-res copies in one dual-output pass.
-// Saves two full-resolution passes vs three separate ones.
-//   Target0 = crt_decay_raw_tex   (current backbuffer -- pre-decay raw frame)
-//   Target1 = crt_decay_prev1_tex (current backbuffer -- becomes prev1 next frame)
-// prev2 is updated separately since it reads from prev1 (last frame), not BackBuffer.
-#if DECAY_BB_INTEGRAL
-// BB integral mode: capture raw + prev1 in one dual-output pass.
-void crt_decay_store_PS(
-    in  float4 position  : SV_Position,
-    in  float2 texcoord  : TEXCOORD0,
-    out float4 out_raw   : SV_Target0,
-    out float4 out_prev1 : SV_Target1)
-{
-    float3 c  = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    out_raw   = float4(c, 1.0);
-    out_prev1 = float4(c, 1.0);
-}
 
-// prev2 still needs a separate pass -- it reads from prev1 (previous frame's value)
-// which is not available in the same pass as BackBuffer capture.
-void crt_decay_prev2_store_PS(
+// ============================================================
+// Running average frametime (Relative spike detection)
+// ============================================================
+void crt_decay_ftavg_copy_PS(
     in  float4 position : SV_Position,
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    color = float4(tex2D(crt_decay_prev1_sampler, texcoord).rgb, 1.0);
+    color = tex2D(crt_decay_ftavg_sampler, float2(0.5, 0.5));
 }
-#else
-// Standard mode: only prev1 is needed -- one full-res write per frame
-// (saves two full-res RGBA writes vs BB-integral mode).
-void crt_decay_store_PS(
-    in  float4 position  : SV_Position,
-    in  float2 texcoord  : TEXCOORD0,
-    out float4 out_prev1 : SV_Target)
+
+void crt_decay_ftavg_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
 {
-    out_prev1 = float4(tex2D(ReShade::BackBuffer, texcoord).rgb, 1.0);
+    float avg = tex2D(crt_decay_ftavg_prev_samp, float2(0.5, 0.5)).r;
+    float ft  = clamp(CRT_FRAMETIME, 0.0, 250.0);
+    // Seed on the first frame; cap outliers at 3x the average so a single
+    // hitch or a loading screen doesn't inflate it for long.
+    float nv  = (avg < 0.5) ? ft : lerp(avg, min(ft, 3.0 * avg), 0.05);
+    color = float4(nv, 0.0, 0.0, 1.0);
+}
+
+#if DECAY_FG_DEBUG
+// ============================================================
+// BFI + frame generation diagnostic (DECAY_FG_DEBUG=1)
+// ============================================================
+void crt_decay_fgmon_copy_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = tex2D(crt_decay_fgmon_sampler, float2(0.5, 0.5));
+}
+
+void crt_decay_fgmon_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float4 st = tex2D(crt_decay_fgmon_prev_samp, float2(0.5, 0.5));
+
+    // Incoming (pre-decay) luminance in display light, 4x4 grid.
+    float y = 0.0;
+    [unroll] for (int sy = 0; sy < 4; sy++)
+    [unroll] for (int sx = 0; sx < 4; sx++)
+    {
+        float3 c = tex2D(ReShade::BackBuffer, float2((sx + 0.5) / 4.0, (sy + 0.5) / 4.0)).rgb;
+        y += dot(crt_decay_decode(c), kDecayLuma);
+    }
+    y /= 16.0;
+
+    bool odd = (FRAMECOUNT & 1u) != 0u;
+    if (odd) st.g = lerp(st.g, y, 0.15);
+    else     st.r = lerp(st.r, y, 0.15);
+
+    // On-screen time of the PREVIOUS frame: ReShade's frametime is the
+    // interval between the last two presents, and under VRR a frame stays up
+    // until the next one arrives.
+    float ft = clamp(CRT_FRAMETIME, 0.0, 100.0);
+    if (odd) st.b = lerp(st.b, ft, 0.05);       // previous frame was even
+    else     st.a = lerp(st.a, ft, 0.05);
+
+    color = st;
+}
+
+// Top-left panel:
+//   rows 1-2 = incoming brightness, lit slot (white) / dark slot (blue)
+//   rows 3-4 = on-screen time, lit slot (yellow) / dark slot (blue)
+//   square   = white on frames passed through by Frametime Spike Suppress;
+//              its apparent brightness is the share of frames suppressed
+// Bars in each pair are scaled to the larger of the two. Drawn after every
+// other pass, on lit and dark frames alike, so it stays steady under BFI.
+float crt_decay_debug_white()
+{
+#if PIPELINE == 2
+    return 200.0 / (0.473625 * crt_soop_hdr10_peak_nits);   // ~200 nits
+#elif PIPELINE == 1 || LINEAR_HDR_INPUT
+    return 2.5;                                              // 200 nits in scRGB
+#else
+    return 1.0;
+#endif
+}
+
+void crt_decay_fgdebug_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float  sc = max(float(BUFFER_HEIGHT) / 1080.0, 1.0);
+    float2 q  = (position.xy - 16.0 * sc) / (float2(260.0, 96.0) * sc);
+    if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0)
+        discard;
+
+    float4 st       = tex2D(crt_decay_fgmon_sampler, float2(0.5, 0.5));
+    int    frames   = max(crt_decay_frames, 2);
+    float4 pd       = tex2D(crt_decay_phase_sampler, float2(0.5, 0.5));
+    bool   odd      = (FRAMECOUNT & 1u) != 0u;
+    bool   this_lit = (int(round(pd.r * 255.0)) % frames) == 0;
+    bool   odd_lit  = this_lit ? odd : !odd;
+    float  lit_in   = odd_lit ? st.g : st.r;
+    float  dark_in  = odd_lit ? st.r : st.g;
+    float  lit_t    = odd_lit ? st.a : st.b;
+    float  dark_t   = odd_lit ? st.b : st.a;
+    float  mx_b     = max(max(lit_in, dark_in), 1e-4);
+    float  mx_t     = max(max(lit_t, dark_t), 1e-4);
+
+    float3 c = float3(0.03, 0.03, 0.03);
+    float  x = q.x / 0.82;
+    if (q.x < 0.82)
+    {
+        if      (q.y > 0.06 && q.y < 0.20) { if (x < lit_in  / mx_b) c = float3(1.0, 1.0, 1.0); }
+        else if (q.y > 0.26 && q.y < 0.40) { if (x < dark_in / mx_b) c = float3(0.3, 0.5, 1.0); }
+        else if (q.y > 0.60 && q.y < 0.74) { if (x < lit_t   / mx_t) c = float3(1.0, 0.9, 0.2); }
+        else if (q.y > 0.80 && q.y < 0.94) { if (x < dark_t  / mx_t) c = float3(0.3, 0.5, 1.0); }
+    }
+    else if (q.x > 0.86 && q.y > 0.06 && q.y < 0.94)
+        c = crt_decay_is_spike() ? float3(1.0, 1.0, 1.0) : float3(0.0, 0.0, 0.0);
+
+    color = float4(crt_decay_output(c * crt_decay_debug_white()), 1.0);
+}
+#endif // DECAY_FG_DEBUG
+
+// ============================================================
+// History stores (after the phase store, before the decay pass)
+// ============================================================
+bool crt_decay_history_needed()
+{
+#if ENABLE_MOTION_SHARPEN
+    return true;
+#else
+    return crt_decay_dark_blend && (crt_decay_dark_floor > 0.0) && (crt_decay_method != 0);
+#endif
+}
+
+// Per-frame ping-pong: even frames write hist0, odd frames hist1 (see
+// crt_decay_prev_frame). Discard = no read, no write.
+void crt_decay_hist0_store_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = float4(0.0, 0.0, 0.0, 1.0);
+    [branch]
+    if ((FRAMECOUNT & 1u) != 0u || !crt_decay_history_needed())
+        discard;
+    else
+        color = float4(tex2D(ReShade::BackBuffer, texcoord).rgb, 1.0);
+}
+
+void crt_decay_hist1_store_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = float4(0.0, 0.0, 0.0, 1.0);
+    [branch]
+    if ((FRAMECOUNT & 1u) == 0u || !crt_decay_history_needed())
+        discard;
+    else
+        color = float4(tex2D(ReShade::BackBuffer, texcoord).rgb, 1.0);
+}
+
+#if DECAY_BB_INTEGRAL
+// Per-cycle rotation for the overlap integral: cyc2 <- cyc1 <- cyc0 <- frame,
+// once per cycle on its first sub-frame, only while Tube Position is in use.
+bool crt_decay_cycle_rotate()
+{
+    int frames = max(crt_decay_frames, 2);
+    int fic    = int(round(tex2D(crt_decay_phase_sampler, float2(0.5, 0.5)).r * 255.0)) % frames;
+    return (fic == 0) && (crt_decay_method == 1) && crt_decay_tube_pos;
+}
+
+void crt_decay_cyc2_store_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = float4(0.0, 0.0, 0.0, 1.0);
+    [branch]
+    if (!crt_decay_cycle_rotate())
+        discard;
+    else
+        color = float4(tex2D(crt_decay_cyc1_sampler, texcoord).rgb, 1.0);
+}
+
+void crt_decay_cyc1_store_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = float4(0.0, 0.0, 0.0, 1.0);
+    [branch]
+    if (!crt_decay_cycle_rotate())
+        discard;
+    else
+        color = float4(tex2D(crt_decay_cyc0_sampler, texcoord).rgb, 1.0);
+}
+
+void crt_decay_cyc0_store_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = float4(0.0, 0.0, 0.0, 1.0);
+    [branch]
+    if (!crt_decay_cycle_rotate())
+        discard;
+    else
+        color = float4(tex2D(ReShade::BackBuffer, texcoord).rgb, 1.0);
 }
 #endif // DECAY_BB_INTEGRAL
 
+// ============================================================
+// BFI / Variable MPRT helpers (display-linear)
+// ============================================================
 
+// Target gain of sub-frame j, relative to the source light.
+// Square wave: lit sub-frame(s) at lit_gain, dark sub-frames at the floor.
+// Sine BFI: cosine between floor and lit_gain (peak shifted by half a cycle
+// when inverted).
+float crt_decay_target(int j, int frames, float lit_gain, float floor_gain)
+{
+    bool inv = crt_decay_invert_cycle && frames > 2;
+    float g;
+    if (crt_decay_sine_bfi)
+    {
+        float phase = (float(j) / float(frames)) * 6.28318531;
+        if (inv) phase += 3.14159265;
+        g = lerp(floor_gain, lit_gain, 0.5 + 0.5 * cos(phase));
+    }
+    else
+    {
+        bool lit = inv ? (j != 0) : (j == 0);
+        g = lit ? lit_gain : floor_gain;
+    }
+    return g;
+}
+
+// BFI Highlight Roll-off. Applies gain g to lin with a hue-preserving
+// shoulder: the whole RGB vector is scaled by one factor driven by its
+// maximum channel, so the brightest channel approaches the panel ceiling P
+// along a slope-continuous curve instead of clipping channel by channel (which
+// is what turned bright saturated colours yellow/white/grey).
+//   - exact passthrough for g <= 1
+//   - linear (full gain) while g * max <= knee * P
+//   - above the knee, [knee, g] maps onto [knee, 1] (in units of P) with
+//     h(t) = 1 - (1-t)^a, a = (g - knee) / (1 - knee): slope 1 at the knee,
+//     monotonic, reaches P exactly where the unboosted signal is at P
+//   - concave, so never darker than the unboosted signal
+//   - content already at or above P is passed through unboosted
+float3 crt_bfi_rolloff_apply(float3 lin, float g, float P, float knee)
+{
+    float m = max(max(lin.r, lin.g), lin.b);
+    float3 r = lin * g;
+    if (g > 1.0 && m > 1e-6)
+    {
+        float u = m / P;          // unboosted max channel, in units of P
+        float v = g * u;          // boosted
+        float k = clamp(knee, 0.05, 0.99);
+        if (u >= 1.0)
+            r = lin;
+        else if (v > k)
+        {
+            float a = (g - k) / (1.0 - k);
+            float t = saturate((v - k) / (g - k));
+            float o = k + (1.0 - k) * (1.0 - pow(1.0 - t, a));
+            r = lin * (o / u);
+        }
+    }
+    return r;
+}
+
+// Variable MPRT brightness budget (Tube Position off). The cycle's total
+// target light, sum_j(target_j) x signal, is emitted front-loaded from the
+// brightest sub-frame onward, each sub-frame holding at most S x signal
+// (S = ceiling / max channel, never below 1 so nothing is dimmed below the
+// unboosted signal). Whatever a sub-frame cannot hold carries into the next
+// one; anything still left after the last sub-frame wraps round and tops up
+// sub-frames that have room, so the cycle total is preserved whenever the
+// panel can hold it. Dim pixels are a single short pulse (maximum clarity),
+// bright pixels persist exactly as long as their energy needs. One scale for
+// all three channels, so every sub-frame keeps the source colour.
+// Returns the scale for sub-frame k.
+float crt_mprt_scale(int k, int frames, float lit_gain, float floor_gain, float S)
+{
+    bool inv = crt_decay_invert_cycle && frames > 2;
+    int  k0  = 0;
+    if (inv)
+        k0 = crt_decay_sine_bfi ? (frames / 2) : 1;
+    int  pos = (k - k0 + frames) % frames;
+
+    // Pass 1: forward fill in emission order (index j = position after k0).
+    float fill[DECAY_MAX_FRAMES];
+    float carry = 0.0;
+    [unroll]
+    for (int j = 0; j < DECAY_MAX_FRAMES; j++)
+    {
+        fill[j] = 0.0;
+        if (j < frames)
+        {
+            float want = crt_decay_target((k0 + j) % frames, frames, lit_gain, floor_gain) + carry;
+            fill[j] = min(want, S);
+            carry   = want - fill[j];
+        }
+    }
+
+    // Pass 2: overflow past the last sub-frame tops up the ones with room.
+    float s = 0.0;
+    [unroll]
+    for (int j2 = 0; j2 < DECAY_MAX_FRAMES; j2++)
+    {
+        if (j2 < frames)
+        {
+            float add = min(carry, S - fill[j2]);
+            carry -= add;
+            if (j2 == pos)
+                s = fill[j2] + add;
+        }
+    }
+    return s;
+}
+
+#if DECAY_BB_INTEGRAL
+// Blur Busters overlap integral (Tube Position on, 240Hz+). Runs on the signal
+// normalised to the panel ceiling, with the two previous decay cycles as history.
+float3 crt_mprt_overlap(float3 lin, float2 texcoord, int frames, int frame_in_cycle, float ceil_lin)
+{
+    float  brightnessScale = float(frames) * crt_decay_gain;
+    float3 pixelCurr  = lin / ceil_lin;
+    float3 pixelPrev1 = crt_decay_decode(tex2D(crt_decay_cyc1_sampler, texcoord).rgb) / ceil_lin;
+    float3 pixelPrev2 = crt_decay_decode(tex2D(crt_decay_cyc2_sampler, texcoord).rgb) / ceil_lin;
+
+    // Scene change: the current frame against the previous cycle's frame.
+    float3 result = lin * brightnessScale;
+    if (abs(dot(pixelCurr, kDecayLuma) - dot(pixelPrev1, kDecayLuma)) <= crt_decay_scene_threshold)
+    {
+        float3 colorCurr  = pixelCurr  * brightnessScale;
+        float3 colorPrev1 = pixelPrev1 * brightnessScale;
+        float3 colorPrev2 = pixelPrev2 * brightnessScale;
+
+        float crtRasterPos = float(frame_in_cycle) / float(frames);
+        float tubePos      = 1.0 - texcoord.y;
+        float tubeFrame    = tubePos * float(frames);
+        float fStart       = crtRasterPos * float(frames);
+        float fEnd         = fStart + 1.0;
+
+        #define BB_CH_FUNC(Lc, Lp1, Lp2) \
+            max(0.0, min((tubeFrame - float(frames)) + (Lp2), fEnd) - max(tubeFrame - float(frames), fStart)) + \
+            max(0.0, min(tubeFrame + (Lp1), fEnd) - max(tubeFrame, fStart)) + \
+            max(0.0, min(tubeFrame + float(frames) + (Lc), fEnd) - max(tubeFrame + float(frames), fStart))
+
+        result = float3(
+            BB_CH_FUNC(colorCurr.r, colorPrev1.r, colorPrev2.r),
+            BB_CH_FUNC(colorCurr.g, colorPrev1.g, colorPrev2.g),
+            BB_CH_FUNC(colorCurr.b, colorPrev1.b, colorPrev2.b)) * ceil_lin;
+        #undef BB_CH_FUNC
+    }
+    return result;
+}
+#endif // DECAY_BB_INTEGRAL
 
 // ============================================================
 // Main decay pass
-// Key design decisions:
 //   - Phase index: FRAMECOUNT % frames, stored /255, decoded *255
-//   - Standard BFI (tubePos off): frame 0 lit at gain, others black
-//   - BB integral (tubePos on, 240Hz+): spatial overlap over 1-texcoord.y
-//   - HDR mode: hard BFI only, no sRGB conversion, no history frames
+//   - BFI / Variable MPRT work in display light (see crt_decay_decode)
 //   - Oscillation: FRAMECOUNT-based, no frametime division (ReShade 6.x safe)
 //   - 30-second startup passthrough
 // ============================================================
@@ -5628,286 +6341,139 @@ void crt_decay_PS(
     int    frames = max(crt_decay_frames, 2);
 
     // Decode phase index. Encoded as float(idx)/255.0 in phase store pass.
-    float4 phase_data   = tex2D(crt_decay_phase_sampler, float2(0.5, 0.5));
+    float4 phase_data     = tex2D(crt_decay_phase_sampler, float2(0.5, 0.5));
     int    frame_in_cycle = int(round(phase_data.r * 255.0)) % frames;
 
-    float3 out_color = float3(0.0, 0.0, 0.0);
-
     // BFI Duty Ratio: skip every N cycles, outputting passthrough instead.
-    // Cycle index = FRAMECOUNT / frames (advances once per complete cycle).
-    // When duty_ratio > 0: active on cycle % (duty_ratio+1) == 0, skip otherwise.
-    // This is independent of frames-per-cycle -- the skip always spans one
-    // complete cycle regardless of how many frames are in it.
-    // Duty flag is computed in the phase-store pass from the same base counter
-    // as the phase itself (FRAMECOUNT or addon refresh count), so cycle
-    // boundaries always align with phase boundaries.
+    // The flag is computed in the phase-store pass from the same base counter
+    // as the phase, so cycle boundaries always align with phase boundaries.
     bool cycle_active = (crt_decay_duty_ratio <= 0) || (phase_data.g > 0.5);
 
-    // Frametime spike detection: if this frame took significantly longer than expected,
-    // output passthrough instead of BFI. A spike frame held on-screen for 2-5x the
-    // expected period causes a visible flash -- suppressing BFI for that frame
-    // eliminates the flash entirely. The next frame resumes normal BFI.
-    bool spike_frame = (CRT_FRAMETIME > CRT_FRAMETIME_EXPECTED * crt_decay_spike_threshold);
+    // Frametime spike detection: if this frame took significantly longer than
+    // expected, output passthrough instead of BFI (a spike frame held on screen
+    // for 2-5x the expected period would flash). The next frame resumes BFI.
+    bool spike_frame = crt_decay_is_spike();
 
     // 30-second startup gate, duty ratio skip, and spike suppression all pass through.
     if (CRT_TIMER < 30000.0 || !cycle_active || spike_frame)
     {
-        out_color = c;
+        color = float4(crt_decay_passthrough(c), 1.0);
+        return;
     }
-    else if (crt_decay_method == 0)
+
+    if (crt_decay_method == 0)
     {
         // ====================================================
         // Method 0: Fibonacci (uniform darkening)
         // ====================================================
         if (frame_in_cycle == 0)
         {
-            out_color = c;
+            color = float4(crt_decay_passthrough(c), 1.0);
+            return;
         }
-        else
+
+        float t = float(frame_in_cycle) / float(frames - 1);
+
+        float fib_sum = 0.0;
+        float fib_w   = 0.0;
+        int   stages  = max(crt_decay_stages, 1);
+        [unroll]
+        for (int s = 0; s < 8; s++)
         {
-            float t = float(frame_in_cycle) / float(frames - 1);
-
-            float fib_sum = 0.0;
-            float fib_w   = 0.0;
-            int   stages  = max(crt_decay_stages, 1);
-            [unroll]
-            for (int s = 0; s < 8; s++)
+            if (s < stages)
             {
-                if (s < stages)
-                {
-                    float w           = kFib[s];
-                    float stage_decay = exp(-crt_decay_speed * kFib[s] * 0.1);
-                    fib_sum += w * stage_decay;
-                    fib_w   += w;
-                }
+                float w           = kFib[s];
+                float stage_decay = exp(-crt_decay_speed * kFib[s] * 0.1);
+                fib_sum += w * stage_decay;
+                fib_w   += w;
             }
-            float base_decay = (fib_w > 0.0) ? saturate(fib_sum / fib_w) : 0.0;
-
-            const float PI_VAL  = 3.14159265;
-            float sine_factor   = 0.5 + 0.5 * cos(PI_VAL * t);
-            float hard_factor   = pow(base_decay, t);
-            float smooth_factor = lerp(hard_factor, sine_factor, crt_decay_sine_blend);
-            float floored       = max(smooth_factor, crt_decay_floor);
-
-            float3 factor = float3(
-                pow(max(floored, 0.001), crt_decay_r),
-                pow(max(floored, 0.001), crt_decay_g),
-                pow(max(floored, 0.001), crt_decay_b)
-            );
-
-            float luma     = dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722));
-            float luma_mix = pow(saturate(luma), max(1.0 - crt_decay_luma_protect, 0.001));
-            factor         = lerp(factor, float3(1.0, 1.0, 1.0), luma_mix * crt_decay_luma_protect);
-
-            // Phosphor trail colour cast: tint the decayed trail component
-            // trail = c*factor - c*1.0 (the "missing" brightness from decay)
-            // Shift trail colour by adding a per-channel tint proportional to (1-factor)
-            float3 trail_tint = float3(
-                1.0 + crt_phosphor_trail_r * (1.0 - factor.r),
-                1.0 + crt_phosphor_trail_g * (1.0 - factor.g),
-                1.0 + crt_phosphor_trail_b * (1.0 - factor.b));
-            out_color = c * factor * trail_tint;
         }
-    }
-    else if (crt_decay_method == 2)
-    {
-            // ====================================================
-            // Method 2: BFI (Black Frame Insertion) -- HDR/linear path
-            //
-            // The BB overlap-integral algorithm requires input values
-            // in bounded [0,1] linear space. In HDR (scRGB/PQ-decoded)
-            // pipelines, values above 1.0 are legal -- a 1000-nit
-            // highlight in an 80-nit reference is ~12.5 in scRGB linear.
-            // Multiplying by (frames x gain) before the overlap math
-            // inflates those values to 15-20+, and the final max(r,0)
-            // clamp cannot rescue them. The result is catastrophically
-            // blown highlights.
-            //
-            // Standard BFI is the correct HDR approach: on "lit" frames
-            // the signal is boosted by (frames x gain) to compensate for
-            // duty-cycle loss; on "dark" frames the output is black.
-            // This is linear-safe at any signal magnitude.
-            // ====================================================
-            // Invert cycle: N-1 lit + 1 dark instead of 1 lit + N-1 dark.
-            // Standard: frame 0 = lit, others = dark.
-            // Inverted: frame 0 = dark, others = lit.
-            // Duty cycle changes so adjust litGain accordingly.
-            bool is_lit;
-            float litGain;
-            if (crt_decay_invert_cycle && frames > 2)
-            {
-                is_lit  = (frame_in_cycle != 0);
-                // duty cycle = (frames-1)/frames, compensate: gain * frames/(frames-1)
-                litGain = float(frames) * crt_decay_gain / max(float(frames - 1), 1.0);
-            }
-            else
-            {
-                is_lit  = (frame_in_cycle == 0);
-                litGain = float(frames) * crt_decay_gain;
-            }
+        float base_decay = (fib_w > 0.0) ? saturate(fib_sum / fib_w) : 0.0;
 
-            if (crt_decay_sine_bfi)
-            {
-                // Sine BFI: cosine phase. Invert shifts the peak to dark frame.
-                float phase = (float(frame_in_cycle) / float(frames)) * 2.0 * 3.14159265;
-                if (crt_decay_invert_cycle && frames > 2) phase += 3.14159265; // shift peak
-                float sine_gain = lerp(crt_decay_dark_floor, litGain, 0.5 + 0.5 * cos(phase));
-                #if PIPELINE >= 1
-                    float3 lin = soop_inv_reinhard(c, crt_soop_shadow_gamma);
-                    lin *= sine_gain;
-                    out_color = soop_reinhard(lin, crt_soop_peak_nits, crt_soop_shadow_gamma);
-                #else
-                    float3 lin = bb_srgb2linear(c);
-                    lin *= sine_gain;
-                    out_color = clamp(bb_linear2srgb(lin), 0.0, 1.0);
-                #endif
-            }
-            else if (is_lit)
-            {
-                // Lit frame: gain applied in linear space.
-                #if PIPELINE >= 1
-                    float3 lin = soop_inv_reinhard(c, crt_soop_shadow_gamma);
-                    lin *= litGain;
-                    out_color = soop_reinhard(lin, crt_soop_peak_nits, crt_soop_shadow_gamma);
-                #else
-                    float3 lin = bb_srgb2linear(c);
-                    lin *= litGain;
-                    out_color = clamp(bb_linear2srgb(lin), 0.0, 1.0);
-                #endif
-            }
-            else
-            {
-                // Dark frame: flat floor or blended floor.
-                if (crt_decay_dark_blend && crt_decay_dark_floor > 0.0)
-                {
-                    float3 prev = tex2D(crt_decay_prev1_sampler, texcoord).rgb;
-                    out_color = lerp(prev, c, 0.5) * crt_decay_dark_floor;
-                }
-                else
-                {
-                    out_color = float3(crt_decay_dark_floor, crt_decay_dark_floor, crt_decay_dark_floor);
-                }
-            }
+        const float PI_VAL  = 3.14159265;
+        float sine_factor   = 0.5 + 0.5 * cos(PI_VAL * t);
+        float hard_factor   = pow(base_decay, t);
+        float smooth_factor = lerp(hard_factor, sine_factor, crt_decay_sine_blend);
+        float floored       = max(smooth_factor, crt_decay_floor);
+
+        float3 factor = float3(
+            pow(max(floored, 0.001), crt_decay_r),
+            pow(max(floored, 0.001), crt_decay_g),
+            pow(max(floored, 0.001), crt_decay_b)
+        );
+
+        float luma     = dot(max(c, 0.0), float3(0.2126, 0.7152, 0.0722));
+        float luma_mix = pow(saturate(luma), max(1.0 - crt_decay_luma_protect, 0.001));
+        factor         = lerp(factor, float3(1.0, 1.0, 1.0), luma_mix * crt_decay_luma_protect);
+
+        // Phosphor trail colour cast: tint the decayed trail component
+        // trail = c*factor - c*1.0 (the "missing" brightness from decay)
+        // Shift trail colour by adding a per-channel tint proportional to (1-factor)
+        float3 trail_tint = float3(
+            1.0 + crt_phosphor_trail_r * (1.0 - factor.r),
+            1.0 + crt_phosphor_trail_g * (1.0 - factor.g),
+            1.0 + crt_phosphor_trail_b * (1.0 - factor.b));
+
+    #if PIPELINE == 0
+        // Encoded-domain multiply -- unchanged from 1.2.x.
+        color = float4(c * factor * trail_tint, 1.0);
+    #else
+        // The same encoded-domain darkening, expressed in display light. Up
+        // to 1.2.3 this scaled the Reinhard-compressed value, which darkened
+        // highlights ~3x harder than midtones on every decay frame.
+        float3 lin_f = crt_decay_decode(c);
+        color = float4(crt_decay_output(lin_f * pow(max(factor * trail_tint, 0.0), kDecayGamma)), 1.0);
+    #endif
+        return;
+    }
+
+    // ========================================================
+    // Methods 1 (Variable MPRT) and 2 (BFI): display light
+    // ========================================================
+    float3 lin      = crt_decay_decode(c);
+    float  ceil_lin = crt_decay_ceiling();
+    float  fl       = crt_decay_dark_floor;
+    bool   inv      = crt_decay_invert_cycle && frames > 2;
+    // Inverted cycle: frames-1 lit sub-frames share the light, so each one
+    // carries frames x gain / (frames - 1).
+    float  lit_gain = inv ? float(frames) * crt_decay_gain / float(frames - 1)
+                          : float(frames) * crt_decay_gain;
+    bool   is_lit   = inv ? (frame_in_cycle != 0) : (frame_in_cycle == 0);
+
+    // Square-wave dark sub-frames may show a 50/50 blend of the previous and
+    // current frame (Dark Frame Blend). The floor scales whichever source --
+    // signal-relative, so true black stays black.
+    float3 src = lin;
+    if (!crt_decay_sine_bfi && !is_lit && crt_decay_dark_blend && fl > 0.0)
+        src = lerp(crt_decay_decode(crt_decay_prev_frame(texcoord)), lin, 0.5);
+
+    float3 out_lin;
+    if (crt_decay_method == 2)
+    {
+        // BFI: dark sub-frames = floor x signal; boosted sub-frames are rolled
+        // off toward the panel ceiling instead of clipping per channel.
+        float g = crt_decay_target(frame_in_cycle, frames, lit_gain, fl);
+        if (crt_bfi_highlight_rolloff)
+            out_lin = crt_bfi_rolloff_apply(src, g, ceil_lin, crt_bfi_rolloff_knee);
+        else
+            out_lin = src * g;
     }
     else
     {
-            // ====================================================
-            // Method 1: Variable MPRT (Blur Busters - SDR only)
-            //
-            // WARNING: This method uses the sRGB transfer function
-            // (bb_srgb2linear / bb_linear2srgb) internally. It assumes
-            // the backbuffer is standard gamma-encoded sRGB (PIPELINE 0).
-            // On PIPELINE 1/2 the backbuffer holds Reinhard-compressed
-            // scRGB -- decoding it with sRGB gamma produces wrong values
-            // and remaps highlights incorrectly. Use BFI (method 2) for
-            // PIPELINE 1/2.
-            //
-            // tubePos OFF: standard BFI in linear space. Default, 120Hz safe.
-            // tubePos ON:  BB spatial overlap integral. 240Hz+ only.
-            // ====================================================
-            #if PIPELINE >= 1
-            // Pipeline mismatch: output a red tint as a visible warning.
-            // Switch to Decay Method = BFI to fix this.
-            out_color = float3(c.r * 0.5 + 0.5, c.g * 0.3, c.b * 0.3);
-            #else
-            float3 pixelCurr      = bb_srgb2linear(c);
-            float  brightnessScale = float(frames) * crt_decay_gain;
-
-            if (!crt_decay_tube_pos)
-            {
-                // Apply same invert logic as method 2.
-                bool m1_is_lit;
-                float m1_scale;
-                if (crt_decay_invert_cycle && frames > 2)
-                {
-                    m1_is_lit = (frame_in_cycle != 0);
-                    m1_scale  = brightnessScale / max(float(frames - 1), 1.0);
-                }
-                else
-                {
-                    m1_is_lit = (frame_in_cycle == 0);
-                    m1_scale  = brightnessScale;
-                }
-
-                if (crt_decay_sine_bfi)
-                {
-                    float phase = (float(frame_in_cycle) / float(frames)) * 2.0 * 3.14159265;
-                    if (crt_decay_invert_cycle && frames > 2) phase += 3.14159265;
-                    float sine_gain = lerp(crt_decay_dark_floor, m1_scale, 0.5 + 0.5 * cos(phase));
-                    out_color = clamp(bb_linear2srgb(pixelCurr * sine_gain), 0.0, 1.0);
-                }
-                else if (m1_is_lit)
-                    out_color = clamp(bb_linear2srgb(pixelCurr * m1_scale), 0.0, 1.0);
-                else
-                {
-                    if (crt_decay_dark_blend && crt_decay_dark_floor > 0.0)
-                    {
-                        float3 prev = tex2D(crt_decay_prev1_sampler, texcoord).rgb;
-                        out_color = lerp(prev, c, 0.5) * crt_decay_dark_floor;
-                    }
-                    else
-                        out_color = float3(crt_decay_dark_floor, crt_decay_dark_floor, crt_decay_dark_floor);
-                }
-            }
-            else
-            {
-                #if !DECAY_BB_INTEGRAL
-                // Tube Position mode requires DECAY_BB_INTEGRAL=1 (extra history
-                // textures). Fall back to standard lit/dark BFI so output stays
-                // sensible; set the preprocessor to enable the overlap integral.
-                if (frame_in_cycle == 0)
-                    out_color = clamp(bb_linear2srgb(pixelCurr * brightnessScale), 0.0, 1.0);
-                else
-                    out_color = float3(crt_decay_dark_floor, crt_decay_dark_floor, crt_decay_dark_floor);
-                #else
-                // BB overlap integral -- only valid with spatially-varying tubePos.
-                float3 pixelPrev1 = bb_srgb2linear(tex2D(crt_decay_prev1_sampler, texcoord).rgb);
-                float3 pixelPrev2 = bb_srgb2linear(tex2D(crt_decay_prev2_sampler, texcoord).rgb);
-
-                float3 colorCurr  = pixelCurr  * brightnessScale;
-                float3 colorPrev1 = pixelPrev1 * brightnessScale;
-                float3 colorPrev2 = pixelPrev2 * brightnessScale;
-
-                float crtRasterPos = float(frame_in_cycle) / float(frames);
-                float tubePos      = 1.0 - texcoord.y;
-                float tubeFrame    = tubePos * float(frames);
-                float fStart       = crtRasterPos * float(frames);
-                float fEnd         = fStart + 1.0;
-
-                #define BB_CH_FUNC(Lc, Lp1, Lp2) \
-                    max(0.0, min((tubeFrame - float(frames)) + (Lp2), fEnd) - max(tubeFrame - float(frames), fStart)) + \
-                    max(0.0, min(tubeFrame + (Lp1), fEnd) - max(tubeFrame, fStart)) + \
-                    max(0.0, min(tubeFrame + float(frames) + (Lc), fEnd) - max(tubeFrame + float(frames), fStart))
-
-                // Scene-change: compare against the raw pre-decay game frame,
-                // NOT prev1 (which holds post-decay output -- alternating lit/black --
-                // and would fire the detector on every dark frame in the cycle).
-                float3 rawPrev = bb_srgb2linear(tex2D(crt_decay_raw_sampler, texcoord).rgb);
-                float lumaC    = dot(pixelCurr, float3(0.2126, 0.7152, 0.0722));
-                float lumaP1   = dot(rawPrev,   float3(0.2126, 0.7152, 0.0722));
-
-                float3 result;
-                if (abs(lumaC - lumaP1) > crt_decay_scene_threshold)
-                {
-                    result = pixelCurr * brightnessScale;
-                }
-                else
-                {
-                    result = float3(
-                        BB_CH_FUNC(colorCurr.r, colorPrev1.r, colorPrev2.r),
-                        BB_CH_FUNC(colorCurr.g, colorPrev1.g, colorPrev2.g),
-                        BB_CH_FUNC(colorCurr.b, colorPrev1.b, colorPrev2.b)
-                    );
-                }
-                #undef BB_CH_FUNC
-
-                out_color = clamp(bb_linear2srgb(result), 0.0, 1.0);
-                #endif // DECAY_BB_INTEGRAL
-            }
-            #endif // PIPELINE >= 1 mismatch guard
+        // Variable MPRT
+    #if DECAY_BB_INTEGRAL
+        if (crt_decay_tube_pos)
+            out_lin = crt_mprt_overlap(lin, texcoord, frames, frame_in_cycle, ceil_lin);
+        else
+    #endif
+        {
+            float m = max(max(lin.r, lin.g), lin.b);
+            float S = (m > 1e-6) ? max(ceil_lin / m, 1.0) : 1e6;
+            out_lin = src * crt_mprt_scale(frame_in_cycle, frames, lit_gain, fl, S);
+        }
     }
 
-    color = float4(out_color, 1.0);
+    color = float4(crt_decay_output(out_lin), 1.0);
 }
 
 #endif
@@ -6263,13 +6829,11 @@ void crt_gamut_expand_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
-
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
     if (crt_gamut_expand_strength < 0.001)
-    {
-        color = float4(c, 1.0);
-        return;
-    }
+        discard;
+
+    float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
 
     float3 linear_c;
 
@@ -6310,8 +6874,11 @@ void crt_screen_reflect_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
+    if (crt_reflect_strength <= 0.001)
+        discard;
+
     float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    if (crt_reflect_strength > 0.001)
     {
         // Edge mask: distance from screen centre, stronger at edges.
         // Uses distance from 0.5 in each axis, raised to power for falloff shape.
@@ -6340,8 +6907,11 @@ void crt_tube_diffuse_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
+    if (crt_tube_diffuse_strength <= 0.001)
+        discard;
+
     float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    if (crt_tube_diffuse_strength > 0.001)
     {
         // Sample from the wide glow texture -- already heavily blurred.
         // Apply gamma to concentrate the effect on brighter content,
@@ -6363,8 +6933,11 @@ void crt_noise_floor_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
+    if (crt_noise_floor <= 0.001)
+        discard;
+
     float3 c = tex2D(ReShade::BackBuffer, texcoord).rgb;
-    if (crt_noise_floor > 0.001)
     {
         uint2 noise_px   = uint2(texcoord * float2(BUFFER_WIDTH, BUFFER_HEIGHT)
                            / max(crt_noise_floor_scale, 1.0));
@@ -6596,11 +7169,9 @@ void crt_light_warp_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
     if (abs(crt_warp_strength) < 0.001 && abs(crt_pin_phase) < 0.001 && abs(crt_pin_amp) < 0.001)
-    {
-        color = tex2D(ReShade::BackBuffer, texcoord);
-        return;
-    }
+        discard;
     float ar   = float(BUFFER_WIDTH) / float(BUFFER_HEIGHT);
     float2 uv  = texcoord - 0.5;
     uv.x      *= ar;
@@ -6667,13 +7238,11 @@ void crt_corner_round_PS(
     in  float2 texcoord : TEXCOORD0,
     out float4 color    : SV_Target)
 {
-    float3 screen = tex2D(ReShade::BackBuffer, texcoord).rgb;
-
+    // Disabled: discard leaves the back buffer as it is -- no read, no write.
     if (crt_corner_size < 0.001 && crt_corner_border < 0.001)
-    {
-        color = float4(screen, 1.0);
-        return;
-    }
+        discard;
+
+    float3 screen = tex2D(ReShade::BackBuffer, texcoord).rgb;
 
     float mask = crt_corner_mask(texcoord);
     // Multiply the image by the mask -- darkens edges/corners, black outside
@@ -6723,6 +7292,7 @@ technique CRT_Standalone <
         RenderTarget = crt_halation_v_tex;
     }
     #endif
+    #if ENABLE_GLOW
     pass GlowH
     {
         VertexShader = PostProcessVS;
@@ -6735,6 +7305,8 @@ technique CRT_Standalone <
         PixelShader  = crt_glow_v_PS;
         RenderTarget = crt_glow_v_tex;
     }
+    #endif
+    #if CRT_GLOW_WIDE
     pass GlowWideH
     {
         VertexShader = PostProcessVS;
@@ -6747,6 +7319,7 @@ technique CRT_Standalone <
         PixelShader  = crt_glow_wide_v_PS;
         RenderTarget = crt_glow_wide_v_tex;
     }
+    #endif
     pass MainCRT
     {
         VertexShader = PostProcessVS;
@@ -6791,11 +7364,10 @@ technique CRT_Standalone <
     #if ENABLE_GRAIN
     pass GrainMerged
     {
-        // Dual output: clean snapshot + grain delta
-        VertexShader  = PostProcessVS;
-        PixelShader   = crt_grain_merged_PS;
-        RenderTarget0 = crt_pregrain_tex;
-        RenderTarget1 = crt_grain_raw_tex;
+        // Grain delta only -- the clean image stays in the back buffer
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_grain_merged_PS;
+        RenderTarget = crt_grain_raw_tex;
     }
     pass GrainDiffuse
     {
@@ -6811,42 +7383,84 @@ technique CRT_Standalone <
     }
     #endif
     #if ENABLE_DECAY
-    // History store. BB-integral mode: raw+prev1 dual-output plus a prev2
-    // copy (3 full-res writes). Standard mode: prev1 only (1 write).
-    #if DECAY_BB_INTEGRAL
-    pass PhosphorDecayStoreRawPrev1
-    {
-        VertexShader  = PostProcessVS;
-        PixelShader   = crt_decay_store_PS;
-        RenderTarget0 = crt_decay_raw_tex;
-        RenderTarget1 = crt_decay_prev1_tex;
-    }
-    pass PhosphorDecayPrev2Store
-    {
-        VertexShader = PostProcessVS;
-        PixelShader  = crt_decay_prev2_store_PS;
-        RenderTarget = crt_decay_prev2_tex;
-    }
-    #else
-    // Standard mode: single prev1 write -- two fewer full-res writes per frame
-    pass PhosphorDecayStorePrev1
-    {
-        VertexShader = PostProcessVS;
-        PixelShader  = crt_decay_store_PS;
-        RenderTarget = crt_decay_prev1_tex;
-    }
-    #endif
+    // Phase first: the history stores and the decay pass both read it.
     pass PhosphorDecayPhaseStore
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_decay_phase_store_PS;
         RenderTarget = crt_decay_phase_tex;
     }
+    // Running average frametime for Relative spike detection (two 1x1 passes).
+    pass PhosphorDecayFrametimeCopy
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_ftavg_copy_PS;
+        RenderTarget = crt_decay_ftavg_prev_tex;
+    }
+    pass PhosphorDecayFrametime
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_ftavg_PS;
+        RenderTarget = crt_decay_ftavg_tex;
+    }
+    #if DECAY_FG_DEBUG
+    pass PhosphorDecayFGMonitorCopy
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_fgmon_copy_PS;
+        RenderTarget = crt_decay_fgmon_prev_tex;
+    }
+    pass PhosphorDecayFGMonitor
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_fgmon_PS;
+        RenderTarget = crt_decay_fgmon_tex;
+    }
+    #endif
+    // Per-frame history (ping-pong). Each pass writes on alternate frames and
+    // only while Dark Frame Blend / Motion Sharpen need it -- otherwise both
+    // discard (no read, no write).
+    pass PhosphorDecayHistory0
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_hist0_store_PS;
+        RenderTarget = crt_decay_hist0_tex;
+    }
+    pass PhosphorDecayHistory1
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_hist1_store_PS;
+        RenderTarget = crt_decay_hist1_tex;
+    }
+    #if DECAY_BB_INTEGRAL
+    // Per-cycle history for the overlap integral, rotated oldest-first on the
+    // first sub-frame of each cycle while Tube Position is on.
+    pass PhosphorDecayCycle2
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_cyc2_store_PS;
+        RenderTarget = crt_decay_cyc2_tex;
+    }
+    pass PhosphorDecayCycle1
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_cyc1_store_PS;
+        RenderTarget = crt_decay_cyc1_tex;
+    }
+    pass PhosphorDecayCycle0
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_cyc0_store_PS;
+        RenderTarget = crt_decay_cyc0_tex;
+    }
+    #endif
     pass PhosphorDecay
     {
+        // With PIPELINE >= 1 this pass also performs the Soop After step.
         VertexShader = PostProcessVS;
         PixelShader  = crt_decay_PS;
     }
+    #if DECAY_AUTO_RESYNC
     // Auto-resync luminance monitors (run after decay, before next phase store)
     pass LumaMonitorLitCopy
     {
@@ -6873,7 +7487,9 @@ technique CRT_Standalone <
         RenderTarget = crt_decay_luma_dark_tex;
     }
     #endif
-    #if PIPELINE >= 1
+    #endif
+    #if PIPELINE >= 1 && !ENABLE_DECAY
+    // (With ENABLE_DECAY=1 the decay pass performs this step itself.)
     pass SoopAfter
     {
         VertexShader = PostProcessVS;
@@ -6927,6 +7543,14 @@ technique CRT_Standalone <
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_corner_round_PS;
+    }
+    #endif
+
+    #if ENABLE_DECAY && DECAY_FG_DEBUG
+    pass FGDebug
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_fgdebug_PS;
     }
     #endif
 }

@@ -1,5 +1,7 @@
 # CRT-Standalone Shader — User Guide
 
+**Version 1.4.0** — see [CHANGELOG.md](CHANGELOG.md) for what changed.
+
 ## Getting Started
 
 ### Installation
@@ -78,7 +80,8 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 
 | Define | Default | Description |
 |---|---|---|
-| `ENABLE_PREBLUR` | 1 | Pre-blur pass — softens source before CRT processing. Also acts as a mild AA at full resolution |
+| `ENABLE_PREBLUR` | 1 | Pre-blur pass — softens the source before CRT processing. At sigma 0 it is an exact copy (since 1.3.0), so set 0 if you don't use it |
+| `ENABLE_GLOW` | 1 | Tight + wide glow. 0 removes the glow passes and sliders (Screen Reflection / Tube Diffuse keep the wide-glow passes they sample) |
 | `ENABLE_MASK` | 1 | Shadow mask / aperture grille simulation |
 | `ENABLE_GAMMA_CORRECT` | 1 | Input/output gamma correction |
 | `ENABLE_BEAM_MODULATION` | 1 | Per-channel scanline beam width modulation |
@@ -114,7 +117,8 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `PREBLUR_FILTER` | 0 | Reconstruction filter for pre-blur and geometry warp sampling. 0=Lanczos2 (default, 4×4 taps), 1=Lanczos3 (6×6 taps, sharper, ~2× cost), 2=Catmull-Rom (4×4 taps, crispest edges at same cost as Lanczos2) |
 | `SCANLINE_REFERENCE_HEIGHT` | 0 | Resolution-independent scanline width. Set to your display's native vertical resolution (2160=4K, 2880=5K). When set, `crt_scanline_width` produces identical-looking scanlines at any render resolution. 0=disabled (default, preserves existing preset behaviour) |
 | `HBEAM_TAPS` | 2 | Horizontal beam reconstruction tap count per side (requires `ENABLE_BEAM_H=1`). 2 = 5-tap (default, plenty for typical spot sizes), 3 = 7-tap for very wide horizontal beams |
-| `DECAY_BB_INTEGRAL` | 0 | Enables the Blur Busters overlap-integral path, which is required **only** by the **Tube Position (raster sweep)** option under Variable MPRT (a 240Hz+ feature). Allocates two extra full-resolution history textures written every frame. Leave at 0 for everything else — standard BFI, Fibonacci, dark-blend, and Variable MPRT *without* Tube Position all write a single history texture per frame. With this at 0, the Tube Position toggle falls back to standard lit/dark BFI |
+| `DECAY_BB_INTEGRAL` | 0 | Enables the Blur Busters overlap-integral path, which is required **only** by the **Tube Position (raster sweep)** option under Variable MPRT (a 240Hz+ feature). Allocates three full-resolution per-cycle history textures, rotated once per decay cycle while Tube Position is on. Leave at 0 for everything else — standard BFI, Fibonacci, dark blend and the Variable MPRT brightness budget don't need it. With this at 0, the Tube Position toggle falls back to the brightness budget |
+| `PREBLUR_LEGACY_SOFTNESS` | 0 | 1 restores the pre-1.3.0 reconstruction, which sampled texel corners and so added a ~3×3 blur to the Pre-Blur centre tap and geometry-warped sampling. 0 (default) samples texel centres: sharper, and sigma 0 is an exact copy |
 
 ### HDR / Pipeline
 
@@ -129,13 +133,17 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 |---|---|---|
 | `FRAMEGEN_PHASE_OFFSET` | 0 | Phase offset for frame generation (0 or 1). Use 1 if BFI phase is inverted |
 | `CRT_FRAMETIME_EXPECTED` | 8.33 | Expected frame period in ms for spike detection. Change for non-120Hz: 6.94=144Hz, 6.06=165Hz |
+| `DECAY_FG_DEBUG` | 0 | Diagnostic for BFI with frame generation: 1 draws a top-left panel — rows 1–2: incoming brightness on the lit slot (white) / dark slot (blue); rows 3–4: on-screen time on the lit slot (yellow) / dark slot (blue); square: lights on frames passed through by Frametime Spike Suppress (its apparent brightness is the share). Adds one back-buffer pass |
+| `DECAY_AUTO_RESYNC` | 1 | Compiles the BFI Auto-Resync monitors. They force one extra full back-buffer copy per frame; set 0 if you don't use Auto-Resync |
 
 ---
 
 ## Settings Reference
 
 ### Pre-Blur
-Softens the source image before it enters the CRT simulation pipeline. At `PREBLUR_RESOLUTION=1` it also functions as a mild AA pass. Increase H/V sigma for stronger softening. Keep radius low (2–3) for performance.
+Softens the source image before it enters the CRT simulation pipeline. Increase H/V sigma for stronger softening. Keep radius low (2–3) for performance.
+
+Since 1.3.0, sigma 0 is an exact passthrough. The softness earlier versions showed at sigma 0 came from a half-texel offset in the reconstruction, not from the blur itself — `PREBLUR_LEGACY_SOFTNESS=1` brings it back.
 
 ### Shadow Mask
 
@@ -463,7 +471,7 @@ The mask is a luminance multiplier — it darkens toward the edges and corners r
 
 Only relevant when using the Soop HDR framework (`PIPELINE=1` or `PIPELINE=2`).
 
-- **Display Peak Brightness (nits)** — peak luminance of your HDR display
+- **Display Peak Brightness (nits)** — peak luminance of your HDR display. Also the ceiling for BFI Highlight Roll-off and the Variable MPRT brightness budget
 - **Shadow Gamma** — gamma of the Reinhard compression shadow region
 - **HDR10 Peak Brightness** — for PIPELINE=2 (HDR10 PQ encoding)
 
@@ -481,49 +489,58 @@ Addresses **sample-and-hold** motion blur — the smearing caused by LCD/OLED pi
 
 ### How it differs from hardware BFI
 
-Hardware BFI turns the backlight off between frames — the pixel values are unchanged, only the illumination is gated. Our implementation alternates between a lit frame (`c × litGain`) and a dark frame (`darkFloor`) on consecutive rendered frames. Each frame is still displayed for the full frame period; the darkness comes from the pixel content, not the backlight.
+Hardware BFI turns the backlight off between frames — the pixel values are unchanged, only the illumination is gated. Our implementation alternates between a lit frame (`signal × litGain`) and a dark frame (`signal × darkFloor`) on consecutive rendered frames. Each frame is still displayed for the full frame period; the darkness comes from the pixel content, not the backlight.
+
+Gain is applied to the light the panel will emit, on every pipeline: the sRGB EOTF for `PIPELINE=0`, raw scRGB for `LINEAR_HDR_INPUT=1`, and the exact Soop After transform for `PIPELINE=1/2` (the decay pass performs Soop After itself). So gain 0.5 at frames=2 is a true passthrough and gain 1.0 doubles light exactly.
 
 ### Decay Method
 
 | Method | Best for | Notes |
 |---|---|---|
 | Fibonacci | Any pipeline, any fps | Uniform progressive darkening. Most stable |
-| Variable MPRT (BB - SDR only) | PIPELINE=0, 120Hz+ | Blur Busters algorithm. Dark pixels decay fast, bright pixels preserved. History frames required |
-| BFI - Black Frame Insertion | Any pipeline | Alternates lit/dark frames. Simplest and most effective for motion clarity |
+| Variable MPRT (brightness budget) | Any pipeline, 120Hz+ | Blur Busters brightness-budget principle. Each pixel's light is emitted front-loaded: dim pixels flash once (maximum clarity), bright pixels that don't fit under the panel ceiling spill into the next frame. Full average brightness at gain 1.0 with nothing clipped |
+| BFI - Black Frame Insertion | Any pipeline | Hard lit/dark alternation — maximum clarity everywhere. Boosted lit frames use Highlight Roll-off |
 
-**Pipeline compatibility:**
-- Variable MPRT: **PIPELINE=0 only**. On PIPELINE=1/2 highlights remap incorrectly — use BFI instead
-- BFI: works on any pipeline, gain applied in linear space for PIPELINE=0 and via Reinhard for PIPELINE=1/2
+**Pipeline compatibility:** all three methods work on all pipelines (since 1.3.0).
+
+**BFI or Variable MPRT?** They are identical at gain 0.5 (frames=2). Above it, BFI keeps every dark frame black and compresses highlights that no longer fit; Variable MPRT keeps highlights at full brightness by letting the brightest pixels persist into the dark frame — slightly less clarity on those pixels only.
 
 ### Key BFI Settings
 
 **Frames per Decay Cycle** — at 120Hz, keep at 2. Higher values reduce perceived brightness further and at 120Hz produce visible 30-40Hz pulsing.
 
-**Gain vs Blur** — `litGain = frames × gain`. At gain=0.5 with frames=2, `litGain=1.0` — the lit frame outputs the signal unchanged with no clipping. Raise above 0.5 to boost mid-tone brightness at the cost of highlight clipping. If bright areas (sky, bloom) appear grey, reduce gain toward 0.4.
+**Gain vs Blur** — `litGain = frames × gain`. At gain=0.5 with frames=2, `litGain=1.0` — the lit frame is the signal unchanged and average brightness is halved. Raising gain recovers brightness: at 1.0 the lit frame carries twice the light. On HDR pipelines there is headroom for this — everything up to half the panel peak is doubled exactly, and what doesn't fit is rolled off (BFI) or spilled into the next frame (Variable MPRT) rather than clipped. In SDR the ceiling is SDR white, so bright content runs out of headroom much sooner.
 
-**VRR Dark Frame Floor** — raises the dark frame from pure black. Reduces BFI flicker amplitude under VRR at the cost of some motion clarity. Start at 0.0, raise to 0.05–0.10 if VRR flicker is distracting.
+**BFI Highlight Roll-off** (BFI method, default on) — when litGain > 1, highlights that would exceed the panel are compressed along a smooth, hue-preserving shoulder instead of clipping per channel (which pushes bright saturated colours toward yellow, white or grey). Exact passthrough at litGain ≤ 1; never darker than the unboosted signal. Off = per-channel clip (1.2.x behaviour).
+
+**BFI Roll-off Knee** — fraction of the panel ceiling below which the lit frame gets the full gain. 0.75 is a good balance; higher keeps more of the range at full gain with a firmer shoulder.
+
+**VRR Dark Frame Floor** — keeps a dimmed copy of the image on dark frames (a fraction of the signal, so black stays black). Reduces BFI flicker amplitude under VRR at the cost of some motion clarity. Start at 0.0 and raise until VRR flicker is acceptable. Values from 1.2.x and earlier (a flat grey floor) are not comparable.
 
 ### Experimental BFI Options
 
 **Invert Cycle** — for 240Hz+ only. Inverts the lit/dark ratio: instead of 1 lit + N-1 dark frames, uses N-1 lit + 1 dark. Maintains higher average brightness while retaining some clarity benefit from the single dark frame. At 120Hz causes visible pulsing — do not use.
 
-**Tube Position (Variable MPRT raster sweep)** — for 240Hz+ only. Simulates the CRT beam sweeping top-to-bottom as a spatially-varying decay phase, using the Blur Busters overlap integral. **Requires the `DECAY_BB_INTEGRAL=1` preprocessor definition** (it allocates two extra history textures); with the define at 0 this toggle does nothing and falls back to standard lit/dark BFI. At 120Hz the sweep period equals the frame period so the gradient band appears frozen on screen — keep it **off** at 120Hz. Only meaningful at 240Hz+.
+**Tube Position (Variable MPRT raster sweep)** — for 240Hz+ only. Simulates the CRT beam sweeping top-to-bottom as a spatially-varying decay phase, using the Blur Busters overlap integral. **Requires the `DECAY_BB_INTEGRAL=1` preprocessor definition** (it allocates three per-cycle history textures); with the define at 0 this toggle falls back to the brightness budget. At 120Hz the sweep period equals the frame period so the gradient band appears frozen on screen — keep it **off** at 120Hz. Only meaningful at 240Hz+.
 
 **BFI Duty Ratio** — skips BFI every N cycles, replacing skipped cycles with passthrough. Reduces flicker at the cost of clarity. The 1:2 setting at 120Hz reduces the effective dark frame rate to 30Hz which may itself be visible as a rhythm.
 
 **Sine BFI** — replaces the hard lit/dark square wave with a smooth cosine gain curve. Reduces the abruptness of transitions. At frames=2 has no practical effect — only meaningful at frames=4+.
 
-**Frametime Spike Suppress** — suppresses BFI output on frames where `CRT_FRAMETIME > CRT_FRAMETIME_EXPECTED × threshold`, outputting passthrough instead. Prevents frametime hitches from causing a bright or dark flash. Default 10.0 (disabled). Set `CRT_FRAMETIME_EXPECTED` to match your display Hz.
+**Frametime Spike Suppress** — passes a frame through unmodified instead of applying BFI when its frametime exceeds threshold × a reference, softening the bright or dark flash a hitch causes. Default 10.0 (disabled).
 
-**BFI Auto-Resync** — monitors average luminance of lit vs dark frames. If dark frames become unexpectedly bright (phase flip), automatically corrects by 1 frame. May not reliably detect desync in all cases.
+**Frametime Spike Detection** — chooses the reference. **Absolute** (default) uses `CRT_FRAMETIME_EXPECTED` — set it to match your display Hz. Note that with a frame cap just below refresh (116–118 fps at 120Hz), thresholds near 1.0 flag most frames, so BFI is largely off. **Relative** uses the running average frametime, so steady pacing at any rate keeps BFI on and only frames that arrive late against their neighbours are passed through; try 1.2–1.5 with frame generation.
+
+**BFI Auto-Resync** — monitors average luminance of lit vs dark frames. If dark frames become unexpectedly bright (phase flip), automatically corrects by 1 frame. May not reliably detect desync in all cases. If you never use it, `DECAY_AUTO_RESYNC=0` removes its passes and one full back-buffer copy per frame. Don't use it with frame generation: it judges lit and dark frames by the phase it is correcting, so after a flip it can switch back and forth.
 
 **Frame Gen Phase Flip** — for DLSS Frame Generation. With 2-frame BFI, FRAMECOUNT naturally alternates real/generated frames between lit and dark phases. If real frames land on the dark phase (image looks dimmer than expected), enable this to flip.
+
 
 ### BFI at 120Hz — Practical Notes
 
 - **Use frames=2.** This is the only value that produces above-fusion-threshold (60Hz) alternation at 120Hz
 - **Lock fps to display Hz.** Under VRR, irregular frame delivery causes the eye to integrate varying lit/dark ratios, producing irregular flicker. Cap fps to 120 (or your display rate) for stable BFI
-- **Gain 0.4–0.5.** At gain=0.5 the lit frame is the game's signal unchanged. Bright content (sky, bloom, highlights) will appear at half perceived brightness on average — this is the unavoidable cost of 50% duty cycle BFI on an SDR display
+- **Gain: 0.5 in SDR, up to 1.0 in HDR.** At gain=0.5 the lit frame is the game's signal unchanged and the average is halved. In HDR (`PIPELINE=1/2`) raise toward 1.0 to recover brightness — Highlight Roll-off (BFI) or the brightness budget (Variable MPRT) keeps highlights from clipping. In SDR, bright content has little headroom above SDR white
 - **BFI and VRR are fundamentally incompatible** for the smoothest results. VRR was designed for motion smoothness; BFI was designed for motion clarity. They oppose each other
 
 ### Fibonacci Decay Notes
@@ -546,10 +563,14 @@ The shader includes several preprocessor defines to trade quality for performanc
 | `HALATION_RESOLUTION=4` | High | None — halation is low frequency |
 | `GLOW_RESOLUTION=2` | High | None — glow is low frequency. **Note:** some games may show a ghost double-image artefact at GLOW_RESOLUTION > 1. Set to 1 if you see this |
 | `ENABLE_EDGE_BLUR=0` | Medium | Slight edge softness loss |
-| `ENABLE_PREBLUR=0` | Medium | Sharper source, less AA |
+| `ENABLE_PREBLUR=0` | Medium | None if Pre-Blur sigma is 0 (an exact copy since 1.3.0); otherwise loses the softening |
 | `ENABLE_PERSISTENCE=0` | Low | Remove persistence simulation |
 | `ENABLE_DECAY=0` | Medium | Removes all BFI passes |
+| `DECAY_AUTO_RESYNC=0` | Medium | None unless you use BFI Auto-Resync — removes one full back-buffer copy per frame |
+| `ENABLE_GLOW=0` | Low | Removes glow (only if both glow strengths are 0) |
 | `PREBLUR_RESOLUTION=2` | Medium | **Visible quality loss — not recommended** |
+
+**Compile out what you don't use.** ReShade copies the entire back buffer before every pass that follows a back-buffer write — about 0.5 ms per pass at 5K scRGB. Since 1.3.0 a pass whose strength is 0 discards instead of rewriting the image, but that copy still happens while the pass is compiled. Sharpen, Edge Blur and Grain default to strength 0 with their `ENABLE_*` defines at 1 — if your preset leaves any of them at 0, set its define to 0.
 
 ---
 
@@ -611,13 +632,10 @@ The same DXGI hook rework that affects BFI may also affect:
 
 No shader-level fix is possible for these issues beyond the workarounds noted above.
 
-### Variable MPRT on PIPELINE=1/2
-
-Using Variable MPRT (Blur Busters method) with `PIPELINE=1` or `PIPELINE=2` causes incorrect highlight remapping. The shader displays a red tint as a warning. Use BFI method instead on HDR pipelines.
-
 ### BFI with Frame Generation
 
 - **DLSS Frame Generation:** FRAMECOUNT increments for generated frames. BFI naturally alternates real/generated frames between lit and dark phases — this is actually correct behaviour. Use Frame Gen Phase Flip if the phase is inverted
+- **FG tools / add-ons with uneven pacing:** if heavy flicker appears in demanding areas, turn BFI Auto-Resync off and try Frametime Spike Detection = Relative with a threshold of 1.2–1.5. `DECAY_FG_DEBUG=1` shows whether pacing is the cause (timing bars far apart) and how many frames are being passed through (square). Pacing that becomes irregular at the source can't be corrected by the shader
 - **Lossless Scaling (LSFG):** Runs outside ReShade, FRAMECOUNT does not see generated frames. LSFG duplicates the last ReShade output frame — if that was a dark frame, the duplicated frame is also dark. BFI is not meaningfully compatible with LSFG
 - **Nvidia Smooth Motion:** Same as LSFG — runs outside ReShade, not compatible. Also affects `ENABLE_INTERLACE` — generated frames are not seen by FRAMECOUNT, causing the interlace field pattern to become irregular (drifting multi-scanline pattern). Interlace is not compatible with any frame generation that runs outside ReShade
 
@@ -646,14 +664,16 @@ CRT_FRAMETIME_EXPECTED=8.33
 Decay Method: BFI
 Frames per Cycle: 2
 Gain vs Blur: 0.5
-VRR Dark Frame Floor: 0.0 (raise to 0.05–0.10 if VRR flicker is distracting)
+VRR Dark Frame Floor: 0.0 (raise gradually if VRR flicker is distracting)
 ```
 
 ### HDR Pipeline
 ```
 PIPELINE=1
 ENABLE_DECAY=1
-Decay Method: BFI (Variable MPRT will show red tint warning on PIPELINE=1)
+Decay Method: BFI or Variable MPRT
+Gain vs Blur: 0.5–1.0 (Highlight Roll-off / brightness budget protect highlights)
+Display Peak Brightness: your panel's peak (e.g. 1400 for an A95L)
 ```
 
 ---
@@ -662,9 +682,9 @@ Decay Method: BFI (Variable MPRT will show red tint warning on PIPELINE=1)
 
 With `frames=2` and `gain=0.5`, the lit frame outputs the game signal unchanged (`litGain=1.0`). The dark frame outputs near-black. The eye integrates both frames and perceives roughly 50% of the original average brightness — this is the unavoidable photometric cost of 50% duty cycle BFI on a display bounded by its peak luminance.
 
-For content with headroom (midtones and below), raising gain above 0.5 partially compensates by boosting the lit frame. For content near peak brightness (sky, clouds, bloom), no compensation is possible — the lit frame is already at the display ceiling. This manifests as bright areas appearing grey compared to no-BFI.
+For content with headroom, raising gain above 0.5 compensates by boosting the lit frame — on an HDR pipeline that is everything below half the panel peak, which in most games is most of the image. For content near peak brightness (sky, clouds, bloom) the lit frame is already at the display ceiling: BFI then rolls those highlights off (they stay dimmer than without BFI, but keep their hue), while Variable MPRT lets them persist into the dark frame so they keep full brightness at slightly reduced clarity.
 
-Hardware BFI (ULMB, LightBoost) addresses this by boosting the backlight intensity during the lit window — effectively multiplying peak luminance by the inverse of the duty cycle. Software BFI cannot do this.
+Hardware BFI (ULMB, LightBoost) addresses this by boosting the backlight intensity during the lit window — effectively multiplying peak luminance by the inverse of the duty cycle. Software BFI cannot raise the panel's peak; on an HDR display it can only use the headroom between the content and that peak.
 
 ---
 

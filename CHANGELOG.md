@@ -8,6 +8,74 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.4.0] — 2026-10
+
+### New Features
+
+- **Frametime Spike Detection: Absolute / Relative** — Relative compares each frame's frametime with the running average instead of the fixed `CRT_FRAMETIME_EXPECTED`, so BFI stays on while pacing is steady at any frame rate and only frames that arrive late against their neighbours are passed through. Meant for frame generation with uneven pacing; try thresholds 1.2–1.5. Absolute (default) is unchanged. Two 1×1 passes
+- **`DECAY_FG_DEBUG`** (default 0) — diagnostic panel for BFI with frame generation: incoming brightness of frames on the lit and dark slots, their on-screen time, and a square that lights on frames passed through by Frametime Spike Suppress (its apparent brightness is the share). One back-buffer pass and two 1×1 passes while enabled; nothing when off
+
+### Changes
+
+- **Frametime Spike Suppress tooltip** — corrected the stated default (10.0, effectively off — not 2.0), and explains that in Absolute mode values near 1.0 with a frame cap just below refresh pass most frames through, leaving BFI largely off (at a steady 8.5 ms, threshold 1.0 passes roughly 70% of frames)
+- **BFI Auto-Resync tooltip** advises against frame generation: it judges lit and dark frames by the phase it is correcting, so after a flip it can switch back and forth
+
+### Notes
+
+- An automatic frame-generation phase lock was prototyped in test builds 1.3.1–1.3.3 and removed. With a DLSS FG tool in Control, both slots received equally bright frames, and where heavy flicker occurred the frame pacing itself became irregular — something no choice of phase can correct
+
+---
+
+## [1.3.0] — 2026-10
+
+Preset-affecting release: BFI / Variable MPRT colour and highlight fixes on every pipeline, a sharper Pre-Blur, and a signal-relative Dark Frame Floor. See **Re-tuning** at the end of this entry.
+
+### Bug Fixes — BFI / Variable MPRT colour and highlights
+
+- **Pipeline 1: lit frames inflated and clipped highlights** — the lit-frame gain decoded the signal with the simple inverse Reinhard (the Soop After transform) but re-encoded it with the extended, peak-white Reinhard (the Soop Before transform). The two are not inverses, so even at the default gain (litGain 1.0) the lit frame was not a passthrough: at a 1400-nit peak an 800-nit highlight left the chain at 1123 nits instead of 931, a 1000-nit one at 1627 instead of 1230 — pushed past the panel, clipped channel by channel, with hue and saturation shifted on the way. At gain 1.0 a 640-nit highlight came out above 2000 nits, so everything from roughly 500 nits up clipped. The decay pass now decodes with exactly the Soop After transform and applies gain to emitted light: gain 0.5 (frames 2) is a true passthrough and gain 1.0 doubles light exactly
+- **Pipeline 2: BFI used the Pipeline 1 transfer** on its sRGB-encoded simple-Reinhard signal — no sRGB decode, the wrong forward curve, and a divide-by-zero at the top that sent highlights to PQ maximum. Now uses the Pipeline 2 transfer (output identical to Soop After)
+- **Raw scRGB (`PIPELINE=0`, `LINEAR_HDR_INPUT=1`): lit frames clipped at 80 nits** — the decay pass ignored the define, decoded linear values as sRGB and clamped them to [0,1]. Now treated as linear with `LINEAR_HDR_PEAK_NITS` as the ceiling; decay history is stored as RGBA16F in this mode (RGB10A2 clipped it as well)
+- **Dark Frame Floor lifted black** — square-wave dark frames output a flat grey regardless of content, raising true black on every dark frame (milky blacks and muted contrast on OLED) and making Auto-Resync flip phase in dark scenes. The floor is now a fraction of the signal, as the Sine BFI trough already was: black stays black
+- **Dark Frame Blend blended the frame with itself** — the history store ran before the decay pass, so the "previous frame" was the current one. History is now a ping-pong pair and the blend uses the real previous frame
+- **Overlap-integral history held no history** — with `DECAY_BB_INTEGRAL=1` all three history textures were overwritten with the current frame before the integral read them, so neither the integral nor the scene-change test ever saw a previous frame. History is now kept per decay cycle — the unit the integral works in — and rotated once per cycle
+- **Variable MPRT with Tube Position off was plain BFI** — the brightness-budget behaviour it describes only existed in the 240Hz+ overlap-integral path. See New Features
+- **Fibonacci decay on Pipeline 1/2** scaled the Reinhard-compressed value, darkening highlights about 3× harder than midtones on every decay frame. It now applies the same encoded-domain response as Pipeline 0, in display light (Pipeline 0 unchanged)
+
+### Bug Fixes — Image
+
+- **Reconstruction sampled texel corners** — the Lanczos / Catmull-Rom reconstruction behind the Pre-Blur centre tap and the geometry warp measured distances from texel corners and placed its taps on them, so on an unwarped image it was not a passthrough but a hidden ~3×3 blur (most of the "mild AA" attributed to Pre-Blur), costing 16 taps and 40 `sin()` per pixel even at sigma 0. It now samples texel centres. **The image is sharper with Pre-Blur on; `PREBLUR_LEGACY_SOFTNESS=1` restores the old look bit-exactly**
+
+### New Features
+
+- **Variable MPRT is now a real brightness budget, on every pipeline** — each pixel's light for the cycle is emitted front-loaded: dim pixels flash once (maximum clarity), bright pixels that don't fit under the panel ceiling spill into the following sub-frame(s), and any remainder tops up sub-frames with room. One scale for all three channels, so every sub-frame keeps the source colour. At gain 1.0 the average matches the no-BFI image wherever the panel can hold it — nothing clips. The red Pipeline 1/2 warning is gone
+- **BFI Highlight Roll-off** (default on) and **BFI Roll-off Knee** (default 0.75) — when Gain vs Blur lifts the lit frame above the signal, highlights that would exceed the panel are compressed along a smooth, hue-preserving shoulder instead of clipping per channel. Exact passthrough at litGain ≤ 1, never darker than the unboosted signal, and content already at peak is not boosted. Ceiling: SDR white, Display Peak Brightness (Pipeline 1/2) or `LINEAR_HDR_PEAK_NITS`
+- **`ENABLE_GLOW`** (default 1) — compiles the glow out entirely. Screen Reflection and Tube Diffuse keep the wide-glow passes they sample
+- **`DECAY_AUTO_RESYNC`** (default 1) — set 0 to remove the four Auto-Resync monitor passes and the extra back-buffer copy they cause
+- **`PREBLUR_LEGACY_SOFTNESS`** (default 0) — see Bug Fixes — Image
+
+### Performance
+
+ReShade copies the whole back buffer before every pass that follows a back-buffer write — roughly 0.5 ms per such pass at 5K scRGB — so most of the gain comes from removing back-buffer passes and copies:
+
+- **Soop After folded into the decay pass** (`PIPELINE>=1` with `ENABLE_DECAY=1`) — one full-resolution pass and one back-buffer copy fewer
+- **Pre-grain snapshot removed** — GrainMerged wrote a full-resolution RGBA16F copy of the clean image every frame; GrainDiffuse now reads it from the back buffer, which GrainMerged leaves untouched
+- **Decay history written only when it is read** — the store passes discard unless Dark Frame Blend is active or Motion Sharpen is compiled in (1.2.3 wrote a full-resolution history texture every frame regardless); overlap-integral history rotates once per cycle instead of three writes per frame
+- **Disabled passes discard instead of copying** — Sharpen, Soften, Motion Sharpen, Persistence, Edge Blur, Grain, Noise Floor, Gamut Expansion, Screen Reflection, Tube Diffuse, Light Warp and Corner Round no longer read and rewrite every pixel at strength 0. The back-buffer copy of a compiled pass remains — set its `ENABLE_*` to 0 to remove that too
+- **Pre-Blur at sigma 0 is a single fetch** (was 16 taps and 40 `sin()`); reconstruction weights are computed once per axis
+- **Glow and Halation skip their passes entirely at strength 0**
+- **Incremental Gaussian weights** in Pre-Blur, Halation, Glow and Wide Glow — two multiplies per tap instead of an `exp()` (per channel with Spectral Bloom); the Pre-Blur range `exp()` is skipped when Edge Preservation is 0, and glow loops no longer fetch taps beyond the active radius
+
+### Re-tuning (preset-affecting)
+
+- **Pre-Blur** is sharper at the same settings — raise H/V sigma slightly, or set `PREBLUR_LEGACY_SOFTNESS=1`
+- **VRR Dark Frame Floor** is now a fraction of the signal — 1.2.x values are not comparable; re-tune up from 0
+- **Pipeline 1 BFI** highlights now render as they do without BFI, so the top end is lower than 1.2.x's inflated highlights. Gain up to 1.0 is now safe (Highlight Roll-off or Variable MPRT)
+- **Variable MPRT above gain 0.5** spills instead of clipping
+- **Fibonacci on Pipeline 1/2** — highlights now decay like midtones
+- **Auto-Resync on Pipeline 1/2** measures the post-Soop-After output (linear / PQ); the detection threshold is unchanged
+
+---
+
 ## [1.2.3] — 2026-06
 
 ### Bug Fixes

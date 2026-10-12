@@ -2,6 +2,8 @@
 
 **Version 1.4.0** — see [CHANGELOG.md](CHANGELOG.md) for what changed.
 
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/artzox)
+
 ## Getting Started
 
 ### Installation

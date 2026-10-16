@@ -1,6 +1,6 @@
 # CRT-Standalone Shader — User Guide
 
-**Version 1.4.0** — see [CHANGELOG.md](CHANGELOG.md) for what changed.
+**Version 1.6.0** — see [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/artzox)
 
@@ -137,6 +137,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `CRT_FRAMETIME_EXPECTED` | 8.33 | Expected frame period in ms for spike detection. Change for non-120Hz: 6.94=144Hz, 6.06=165Hz |
 | `DECAY_FG_DEBUG` | 0 | Diagnostic for BFI with frame generation: 1 draws a top-left panel — rows 1–2: incoming brightness on the lit slot (white) / dark slot (blue); rows 3–4: on-screen time on the lit slot (yellow) / dark slot (blue); square: lights on frames passed through by Frametime Spike Suppress (its apparent brightness is the share). Adds one back-buffer pass |
 | `DECAY_AUTO_RESYNC` | 1 | Compiles the BFI Auto-Resync monitors. They force one extra full back-buffer copy per frame; set 0 if you don't use Auto-Resync |
+| `DECAY_STATUS_SQUARE` | 0 | 1 draws a small square in the top-left corner, after every other effect: green = strobing, amber = paused by the Hitch Guard, red = the game isn't running at the Display Refresh Rate. Adds one back-buffer pass |
 
 ---
 
@@ -537,12 +538,23 @@ Gain is applied to the light the panel will emit, on every pipeline: the sRGB EO
 
 **Frame Gen Phase Flip** — for DLSS Frame Generation. With 2-frame BFI, FRAMECOUNT naturally alternates real/generated frames between lit and dark phases. If real frames land on the dark phase (image looks dimmer than expected), enable this to flip.
 
+### Hitch Guard, LCD and ABL Guard (1.6.0)
+
+The same guards as the [BFI Presenter](https://github.com/artzox/BFI-Presenter) shader. All off by default, so existing presets look the same.
+
+**Hitch Guard** — for a fixed refresh rate with VSync (G-SYNC / VRR off) and a game that holds exactly that frame rate. A shader can't see the display's refreshes, only the time between the game's frames, so the guard sums each frame time minus one refresh: CPU-measured times jitter in long/short pairs that cancel out, but a missed refresh moves the sum by a whole refresh. When that happens, a frame takes more than 3 refreshes, the game runs faster than the display, or the average frame time is more than 10% off, every frame is shown at the strobe's **average brightness** for **Pause After a Hitch** (500 ms) instead of strobing. A lit or dark frame held for two refreshes is what flashes; the average can't. Set **Display Refresh Rate** to your display's (120 by default); raise **Frame Time Tolerance** (0.6 refreshes) if it pauses while the game runs smoothly. Not for VRR or a cap below refresh (e.g. 118 fps at 120 Hz): the average is off there, so BFI would stay paused. Fibonacci passes paused frames through. Unlike Frametime Spike Suppress, which passes single long frames through unmodified, the guard also catches a missed refresh hidden by jitter, holds the pause long enough for the phase to settle, and shows the strobe's average brightness (unmodified frames are brighter than that below gain 1.0). `DECAY_STATUS_SQUARE=1` shows what it's doing.
+
+**LCD: Prevent Image Retention** — for LCD monitors (IPS, VA, TN); OLED doesn't need it. An LCD drives each refresh with the opposite voltage of the one before. With an even number of frames per cycle every lit frame gets the same voltage, and long sessions can leave a ghost of the image. Every **Seconds of Full Strobe Between Swaps** (5 by default, counted from the end of each fade) the decay fades to the steady average picture over about half a second, shifts the cycle by one frame while every frame looks the same, and fades back, so the lit frames alternate between the two voltages. No flicker; motion is briefly softer. Not needed with an odd number of frames.
+
+**ABL Guard** (HDR: `PIPELINE=1/2` or `LINEAR_HDR_INPUT=1`; not under Direct3D 9) — Gain vs Blur pushes the lit frame toward the panel peak, and in very bright scenes that can exceed an OLED's full-screen power budget: its own limiter (ABL) then dims lit frames unevenly, which pulses or flashes. The guard measures the lit frame's average light on a 32×18 grid and lowers the lit frame's ceiling just enough to stay within **ABL Guard Budget** (the panel's full-white brightness: 250 nits for the Sony A95L) — pulled down fast, released slowly after 1.5 s under budget. Dark and mid-tone content is unaffected.
+
 
 ### BFI at 120Hz — Practical Notes
 
 - **Use frames=2.** This is the only value that produces above-fusion-threshold (60Hz) alternation at 120Hz
 - **Lock fps to display Hz.** Under VRR, irregular frame delivery causes the eye to integrate varying lit/dark ratios, producing irregular flicker. Cap fps to 120 (or your display rate) for stable BFI
 - **Gain: 0.5 in SDR, up to 1.0 in HDR.** At gain=0.5 the lit frame is the game's signal unchanged and the average is halved. In HDR (`PIPELINE=1/2`) raise toward 1.0 to recover brightness — Highlight Roll-off (BFI) or the brightness budget (Variable MPRT) keeps highlights from clipping. In SDR, bright content has little headroom above SDR white
+- **Hitch Guard on** at a locked rate: a hitch then shows the average picture instead of a flash. On an LCD also turn on **LCD: Prevent Image Retention**; in HDR on an OLED, **ABL Guard** with the panel's full-white brightness as budget
 - **BFI and VRR are fundamentally incompatible** for the smoothest results. VRR was designed for motion smoothness; BFI was designed for motion clarity. They oppose each other
 
 ### Fibonacci Decay Notes

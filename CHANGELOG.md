@@ -8,6 +8,23 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.6.0] — 2026-10
+
+The guards of the [BFI Presenter](https://github.com/artzox/BFI-Presenter) shader, ported to the decay pass. All off by default: existing presets are unchanged. (1.5.x were unreleased Hitch Softening test builds, dropped.)
+
+### New Features
+
+- **Hitch Guard** (category Phosphor Decay - Hitch Guard) — for a fixed refresh rate with VSync and a game holding exactly that rate. Sums each frame time minus one refresh (`CRT_FRAMETIME`): CPU-measured jitter cancels out, a missed refresh moves the sum by a whole refresh. On a missed refresh, a frame longer than 3 refreshes, a game faster than the display or an average more than 10% off the refresh, every frame is shown at the strobe's average brightness for **Pause After a Hitch** (500 ms) instead of strobing; Fibonacci passes through. Settings: **Display Refresh Rate** (120), **Pause After a Hitch**, **Frame Time Tolerance** (0.6 refreshes). Not for VRR or a cap below refresh
+- **LCD: Prevent Image Retention** (category Phosphor Decay - LCD) — every **Seconds of Full Strobe Between Swaps** (5, counted from the end of each fade) fades to the steady average picture over ~0.4 s, shifts the cycle by one frame and fades back, so an LCD's lit frames alternate drive polarity. For IPS / VA / TN; OLED doesn't need it; does nothing with an odd number of frames
+- **ABL Guard** (category Phosphor Decay - ABL Guard (HDR); `PIPELINE=1/2` or `LINEAR_HDR_INPUT=1`, D3D10+ / OpenGL / Vulkan) — measures the lit frame's average light on a 32×18 grid and lowers the lit-frame ceiling just enough to stay within **ABL Guard Budget** (the panel's full-white brightness, 250 nits for the Sony A95L): pulled down fast, released slowly after 1.5 s. BFI and Variable MPRT
+- **`DECAY_STATUS_SQUARE`** (default 0) — top-left square drawn last: green = strobing, amber = paused by the Hitch Guard, red = not running at the Display Refresh Rate. One back-buffer pass while compiled in
+
+### Performance
+
+- Two tiny passes for the guard state (3×1 texels), plus with the ABL Guard compiled in (HDR) a 32×18 pass that reads the decay input before the decay pass, sharing its back-buffer copy. No extra back-buffer pass unless `DECAY_STATUS_SQUARE=1`
+
+---
+
 ## [1.4.0] — 2026-10
 
 ### New Features

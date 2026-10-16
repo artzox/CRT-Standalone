@@ -1,7 +1,7 @@
 #include "ReShade.fxh"
 
 /*
-    CRT-Standalone.fx  --  v1.4.0
+    CRT-Standalone.fx  --  v1.6.0
     Self-contained CRT shader. Features:
     - Pre-blur (H+V) before mask/scanlines, matching Guest Advanced SIZEH/SIZEV
     - Aperture grille mask (resolution-aware, anti-aliased)
@@ -284,6 +284,18 @@
 #ifndef DECAY_FG_DEBUG
     #define DECAY_FG_DEBUG 0
 #endif
+
+// Decay status square (default 0). 1 = a small square in the top-left corner,
+// drawn after every other effect: green = strobing, amber = paused by the
+// Hitch Guard, red = the game is not running at the Display Refresh Rate.
+// Costs one back-buffer pass while compiled in; nothing when 0.
+#ifndef DECAY_STATUS_SQUARE
+    #define DECAY_STATUS_SQUARE 0
+#endif
+
+// ABL Guard (BFI / Variable MPRT in HDR) needs loops the Direct3D 9 shader
+// model can't run; it is compiled only for D3D10+ / OpenGL / Vulkan and only
+// for HDR output (PIPELINE 1/2 or LINEAR_HDR_INPUT=1).
 
 // Anti Burn-In
 #ifndef ENABLE_BURNIN_PHASE
@@ -1973,6 +1985,12 @@ uniform float crt_noise_floor_scale <
 
 #if ENABLE_DECAY
 
+#if (__RENDERER__ >= 0xa000) && (PIPELINE >= 1 || LINEAR_HDR_INPUT)
+    #define CRT_DECAY_ABL 1
+#else
+    #define CRT_DECAY_ABL 0
+#endif
+
 uniform float crt_phosphor_trail_r <
     ui_type = "drag"; ui_label = "Phosphor Trail Red Tint";
     ui_category = "Phosphor Decay";
@@ -2377,6 +2395,102 @@ uniform bool crt_decay_tube_pos <
                  "per-cycle history textures). Without it this toggle falls back to\n"
                  "the brightness-budget spill.";
 > = false;
+
+// -- Phosphor Decay - Hitch Guard (1.6.0, from the BFI Presenter shader) --
+uniform bool crt_decay_hitch_guard <
+    ui_label = "Hitch Guard";
+    ui_category = "Phosphor Decay - Hitch Guard";
+    ui_tooltip = "For a fixed refresh rate with VSync and a game that holds exactly\n"
+                 "that frame rate (G-SYNC / VRR off).\n"
+                 "\n"
+                 "A shader can't see the display's refreshes, only the time between\n"
+                 "the game's frames. The guard sums each frame time minus one refresh:\n"
+                 "CPU-measured times jitter in long/short pairs that cancel out, but a\n"
+                 "missed refresh moves the sum by a whole refresh. When that happens,\n"
+                 "or a frame takes more than 3 refreshes, or the game runs faster than\n"
+                 "the display, or the average frame time is more than 10% off the\n"
+                 "refresh, every frame is shown at the strobe's average brightness for\n"
+                 "Pause After a Hitch instead of strobing -- a lit or dark frame held\n"
+                 "for two refreshes is what flashes.\n"
+                 "\n"
+                 "Not for VRR or a frame cap below the refresh rate: the average is\n"
+                 "off there, so the guard would keep BFI paused.\n"
+                 "Fibonacci: paused frames pass through unmodified.";
+> = false;
+
+uniform float crt_decay_refresh_hz <
+    ui_type = "drag"; ui_label = "Display Refresh Rate (Hz)";
+    ui_category = "Phosphor Decay - Hitch Guard";
+    ui_tooltip = "The fixed refresh rate the display runs at. The Hitch Guard compares\n"
+                 "the game's frame times with it.";
+    ui_min = 60.0; ui_max = 360.0; ui_step = 1.0;
+> = 120.0;
+
+uniform float crt_decay_hitch_hold <
+    ui_type = "drag"; ui_label = "Pause After a Hitch (ms)";
+    ui_category = "Phosphor Decay - Hitch Guard";
+    ui_tooltip = "How long BFI stays paused (average brightness) after a hitch.";
+    ui_min = 0.0; ui_max = 3000.0; ui_step = 50.0;
+> = 500.0;
+
+uniform float crt_decay_hitch_tol <
+    ui_type = "drag"; ui_label = "Frame Time Tolerance";
+    ui_category = "Phosphor Decay - Hitch Guard";
+    ui_tooltip = "How far (in refreshes) the game's frames may drift from one per\n"
+                 "refresh before it counts as a missed refresh. Raise it if the guard\n"
+                 "pauses BFI while the game runs smoothly (frame times that jitter a\n"
+                 "lot). DECAY_STATUS_SQUARE=1 shows when it pauses.";
+    ui_min = 0.2; ui_max = 0.9; ui_step = 0.05;
+> = 0.6;
+
+// -- Phosphor Decay - LCD (1.6.0) ------------------------------
+uniform bool crt_decay_lcd_swap <
+    ui_label = "LCD: Prevent Image Retention";
+    ui_category = "Phosphor Decay - LCD";
+    ui_tooltip = "For LCD monitors (IPS, VA, TN) -- not needed on OLED.\n"
+                 "\n"
+                 "An LCD drives each refresh with the opposite voltage of the one\n"
+                 "before. With an even number of frames per cycle every lit frame gets\n"
+                 "the same voltage, and long sessions can leave a ghost of the image.\n"
+                 "Every few seconds this fades the strobe to the steady average picture\n"
+                 "over about half a second, shifts the cycle by one frame while every\n"
+                 "frame looks the same, and fades back, so the lit frames alternate\n"
+                 "between the two voltages. No flicker; motion is briefly softer.\n"
+                 "Not needed with an odd number of frames per cycle.";
+> = false;
+
+uniform int crt_decay_lcd_swap_sec <
+    ui_type = "slider"; ui_label = "LCD: Seconds of Full Strobe Between Swaps";
+    ui_category = "Phosphor Decay - LCD";
+    ui_tooltip = "Counted from the end of each fade, so the strobe runs at full depth\n"
+                 "for the whole interval. 5 (default) cleared retention on an IPS\n"
+                 "panel that still showed it at 30.";
+    ui_min = 1; ui_max = 300;
+> = 5;
+
+#if CRT_DECAY_ABL
+// -- Phosphor Decay - ABL Guard (1.6.0, HDR) -------------------
+uniform bool crt_decay_abl_guard <
+    ui_label = "ABL Guard";
+    ui_category = "Phosphor Decay - ABL Guard (HDR)";
+    ui_tooltip = "BFI / Variable MPRT in HDR. Gain vs Blur pushes the lit frame toward\n"
+                 "the panel peak; in very bright scenes that can exceed the panel's\n"
+                 "full-screen power budget, and its own limiter (ABL) then dims the\n"
+                 "lit frames unevenly -- a pulsing or flashing picture.\n"
+                 "\n"
+                 "The guard measures the lit frame's average light on a 32x18 grid\n"
+                 "and lowers the lit frame's ceiling just enough to stay within ABL\n"
+                 "Guard Budget: pulled down fast, released slowly after 1.5 s under\n"
+                 "budget. Dark and mid-tone content is unaffected.";
+> = false;
+
+uniform float crt_decay_abl_budget <
+    ui_type = "drag"; ui_label = "ABL Guard Budget (nits)";
+    ui_category = "Phosphor Decay - ABL Guard (HDR)";
+    ui_tooltip = "The display's full-white brightness: 250 for the Sony A95L.";
+    ui_min = 100.0; ui_max = 1000.0; ui_step = 10.0;
+> = 250.0;
+#endif
 #endif
 
 // -- Phosphor Decay - Variable MPRT only ---------------------
@@ -2684,6 +2798,23 @@ texture2D crt_decay_phase_tex < pooled = false; >
     Format = RGBA8;
 };
 sampler2D crt_decay_phase_sampler { Texture = crt_decay_phase_tex; };
+
+// Hitch Guard / ABL Guard / LCD phase swap state (1.6.0), ping-pong:
+// texel 0 -- x: pause until (timer, ms)   y: smoothed frame time (ms)
+//            z: lit-frame ceiling now (nits)   w: time the ceiling was last pulled down (ms)
+// texel 1 -- x: refresh drift (ms): frame times minus refreshes, summed
+// texel 2 -- LCD phase swap. x: cycle offset (frames)  y: fade (0 = full strobe, 1 = steady)
+//            z: 0 idle, 1 fading to steady, 2 fading back   w: time of the last swap (ms)
+texture2D crt_decay_guard_tex      < pooled = false; > { Width = 3; Height = 1; Format = RGBA32F; };
+texture2D crt_decay_guard_prev_tex < pooled = false; > { Width = 3; Height = 1; Format = RGBA32F; };
+sampler2D crt_decay_guard_sampler   { Texture = crt_decay_guard_tex;      MipFilter = NONE; MinFilter = POINT; MagFilter = POINT; };
+sampler2D crt_decay_guard_prev_samp { Texture = crt_decay_guard_prev_tex; MipFilter = NONE; MinFilter = POINT; MagFilter = POINT; };
+
+#if CRT_DECAY_ABL
+// ABL Guard: lit-frame light (nits) of each of 32x18 cells at the full ceiling.
+texture2D crt_decay_cells_tex < pooled = false; > { Width = 32; Height = 18; Format = R32F; };
+sampler2D crt_decay_cells_sampler { Texture = crt_decay_cells_tex; MipFilter = NONE; MinFilter = POINT; MagFilter = POINT; };
+#endif
 
 #if DECAY_AUTO_RESYNC
 // Auto-resync luminance monitor: two 1x1 textures for lit and dark frame EMA.
@@ -5868,6 +5999,32 @@ float crt_decay_ceiling()
 #endif
 }
 
+// Nits per display-linear unit of crt_decay_decode() (HDR pipelines; the
+// ABL Guard works in nits).
+float crt_decay_nits_per_unit()
+{
+#if PIPELINE == 2
+    return 0.473625 * crt_soop_hdr10_peak_nits;
+#else
+    return 80.0;
+#endif
+}
+
+// Lit sub-frame gain (inverted cycle: frames-1 lit sub-frames share the light).
+float crt_decay_lit_gain(int frames)
+{
+    bool inv = crt_decay_invert_cycle && frames > 2;
+    return inv ? float(frames) * crt_decay_gain / float(frames - 1)
+               : float(frames) * crt_decay_gain;
+}
+
+// Hitch Guard state (1.6.0): BFI paused, shown at the strobe's average.
+bool crt_decay_hitch_paused()
+{
+    return crt_decay_hitch_guard &&
+           CRT_TIMER < tex2Dfetch(crt_decay_guard_sampler, int2(0, 0)).x;
+}
+
 #if DECAY_AUTO_RESYNC
 // Shared luma sampler for monitor -- samples post-decay backbuffer at 9 points.
 float crt_decay_sample_luma()
@@ -5924,13 +6081,10 @@ void crt_decay_luma_dark_PS(
 
 #endif // DECAY_AUTO_RESYNC
 
-void crt_decay_phase_store_PS(
-    in  float4 position : SV_Position,
-    in  float2 texcoord : TEXCOORD0,
-    out float4 color    : SV_Target)
+// Phase offset from Frame Gen Phase Flip, FRAMEGEN_PHASE_OFFSET and
+// Auto-Resync (the LCD phase swap's own offset is added on top).
+int crt_decay_base_offset(int frames)
 {
-    int frames = max(crt_decay_frames, 2);
-
     // Auto-resync: dark frame EMA should be near dark_floor, not near lit EMA.
     // If dark_avg > 40% of lit_avg the phase has flipped -- add 1 to correct.
     // Only meaningful for 2-frame BFI where lit/dark distinction is cleanest.
@@ -5944,8 +6098,159 @@ void crt_decay_phase_store_PS(
             auto_offset = 1;
     }
 #endif
+    return (crt_decay_fg_phase ? 1 : 0) + FRAMEGEN_PHASE_OFFSET + auto_offset;
+}
 
-    int phase_offset = (crt_decay_fg_phase ? 1 : 0) + FRAMEGEN_PHASE_OFFSET + auto_offset;
+#if CRT_DECAY_ABL
+// ABL Guard: lit-frame light of each cell at the full panel ceiling (4x4
+// samples per cell), in nits. Reads the decay pass's input.
+void crt_decay_cells_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    int    frames   = max(crt_decay_frames, 2);
+    float  ceil_lin = crt_decay_ceiling();
+    float  lit_gain = crt_decay_lit_gain(frames);
+    float2 cell     = float2(BUFFER_WIDTH, BUFFER_HEIGHT) / float2(32.0, 18.0);
+    float  sum      = 0.0;
+    [unroll] for (int y = 0; y < 4; y++)
+    [unroll] for (int x = 0; x < 4; x++)
+    {
+        float2 p   = (floor(position.xy) + (float2(x, y) + 0.5) / 4.0) * cell;
+        float3 lin = crt_decay_decode(tex2Dlod(ReShade::BackBuffer, float4(p / float2(BUFFER_WIDTH, BUFFER_HEIGHT), 0, 0)).rgb);
+        float  m   = max(max(lin.r, lin.g), lin.b);
+        float  S   = (m > 1e-6) ? max(ceil_lin / m, 1.0) : 1e6;
+        sum += dot(lin, kDecayLuma) * min(lit_gain, S);
+    }
+    color = float4(sum / 16.0 * crt_decay_nits_per_unit(), 0.0, 0.0, 1.0);
+}
+
+// Average lit-frame light (nits) with the ceiling at C nits.
+float crt_decay_abl_avg_at(float C)
+{
+    float a = 0.0;
+    for (int y = 0; y < 18; y++)
+        for (int x = 0; x < 32; x++)
+            a += min(tex2Dfetch(crt_decay_cells_sampler, int2(x, y)).r, C);
+    return a / (32.0 * 18.0);
+}
+#endif
+
+// Hitch Guard, ABL Guard and LCD phase swap state (1.6.0) -- the BFI Presenter
+// shader's logic. Reads last frame's state, writes this frame's.
+void crt_decay_guard_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    float ft     = clamp(CRT_FRAMETIME, 0.0, 1000.0);
+    float now    = CRT_TIMER;
+    float P      = 1000.0 / max(crt_decay_refresh_hz, 1.0);
+    int   frames = max(crt_decay_frames, 2);
+
+    if (position.x >= 2.0)
+    {
+        // LCD phase swap: fade to the steady average picture over ~0.4 s,
+        // shift the cycle by one frame while every frame looks the same, fade
+        // back. Interval counted from the end of the fade-back.
+        float4 s = tex2Dfetch(crt_decay_guard_prev_samp, int2(2, 0));
+        if (s.w > now + 10000.0 || s.w <= 0.0) s = float4(0.0, 0.0, 0.0, now);   // first frame, or timer restarted
+        bool hitch = crt_decay_hitch_guard && now < tex2Dfetch(crt_decay_guard_prev_samp, int2(0, 0)).x;
+        if (!crt_decay_lcd_swap || (frames % 2) != 0 || now < 30000.0)
+        {
+            color = float4(s.x, 0.0, 0.0, now);
+            return;
+        }
+        float stp = clamp(ft, 0.0, 100.0) / 400.0;
+        if (s.z < 0.5 && !hitch && now - s.w >= float(crt_decay_lcd_swap_sec) * 1000.0) s.z = 1.0;
+        if (s.z > 0.5 && s.z < 1.5)
+        {
+            s.y = min(1.0, s.y + stp);
+            int slot = (int(FRAMECOUNT) + crt_decay_base_offset(frames) + int(s.x)) % frames;
+            if (s.y >= 1.0 && slot == frames - 1)
+            {
+                s.x = float((int(s.x) + frames - 1) % frames);   // the next frame repeats this slot, at the steady picture
+                s.z = 2.0;
+            }
+        }
+        else if (s.z > 1.5)
+        {
+            s.y = max(0.0, s.y - stp);
+            if (s.y <= 0.0) { s.z = 0.0; s.w = now; }
+        }
+        color = s;
+        return;
+    }
+
+    // Refresh drift: frame time minus one refresh, summed (with a slow leak
+    // for a display at 119.9 instead of 120 Hz). CPU-measured frame times
+    // jitter in long/short pairs that cancel out; a missed refresh moves the
+    // sum by a whole refresh and keeps it there, a game faster than the
+    // display pulls it down every frame.
+    float d = tex2Dfetch(crt_decay_guard_prev_samp, int2(1, 0)).x;
+    if (abs(d) > 1000.0) d = 0.0;
+    d = (d + ft - P) * 0.99;
+    bool missed = false;
+    if (d >  crt_decay_hitch_tol * P) { missed = true; d -= P; }
+    if (d < -crt_decay_hitch_tol * P) { missed = true; d += P; }
+    if (position.x >= 1.0) { color = float4(d, 0.0, 0.0, 0.0); return; }
+
+    float4 st = tex2Dfetch(crt_decay_guard_prev_samp, int2(0, 0));
+    if (st.y <= 0.0 || st.y > 1000.0) st.y = P;                       // first frame
+    st.y = lerp(st.y, min(ft, 100.0), 0.05);
+    // ... or the average off by 10 %: the game doesn't run at the refresh rate.
+    bool bad = missed || ft > 3.0 * P || abs(st.y - P) > 0.1 * P;
+    if (bad) st.x = now + crt_decay_hitch_hold;
+    if (st.x > now + 10000.0) st.x = now;                             // timer restarted
+
+    // ABL Guard: the highest ceiling at which the lit frame averages no more
+    // than the budget; pulled down fast, released only after 1.5 s under
+    // budget and then slowly (a quick release bounces off the panel's limiter).
+    float peak   = 0.0;
+    float target = 0.0;
+#if CRT_DECAY_ABL
+    peak   = crt_decay_ceiling() * crt_decay_nits_per_unit();
+    target = peak;
+    if (crt_decay_abl_guard && crt_decay_method != 0)
+    {
+        if (crt_decay_abl_avg_at(peak) > crt_decay_abl_budget)
+        {
+            float lo = 100.0, hi = peak;
+            for (int it = 0; it < 14; it++)
+            {
+                float mid = 0.5 * (lo + hi);
+                if (crt_decay_abl_avg_at(mid) <= crt_decay_abl_budget) lo = mid; else hi = mid;
+            }
+            target = lo;
+        }
+    }
+#endif
+    float dt = clamp(ft, 0.0, 100.0) / 1000.0;
+    if (st.z <= 0.0 || st.z > peak) st.z = target;
+    else if (target < st.z - 5.0) { st.w = now; st.z += (target - st.z) * (1.0 - exp(-dt / 0.08)); }
+    else if (now - st.w > 1500.0)  st.z += (target - st.z) * (1.0 - exp(-dt / 2.5));
+    color = st;
+}
+
+void crt_decay_guard_copy_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    color = tex2Dfetch(crt_decay_guard_sampler, int2(position.xy));
+}
+
+void crt_decay_phase_store_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    int frames = max(crt_decay_frames, 2);
+
+    // LCD phase swap (1.6.0) shifts the cycle on top of the base offset.
+    int lcd_offset   = int(max(tex2Dfetch(crt_decay_guard_sampler, int2(2, 0)).x, 0.0));
+    int phase_offset = crt_decay_base_offset(frames) + lcd_offset;
     int idx          = (int(FRAMECOUNT) + phase_offset) % frames;
 
     // Duty-cycle skip flag, computed from the same counter as the phase so
@@ -6202,6 +6507,17 @@ float crt_decay_target(int j, int frames, float lit_gain, float floor_gain)
     return g;
 }
 
+// The strobe's average gain over one cycle: what a steady (unstrobed) frame
+// needs to emit the same light -- Hitch Guard pause and the LCD swap fade.
+float crt_decay_avg_gain(int frames, float lit_gain, float floor_gain)
+{
+    float a = 0.0;
+    [unroll]
+    for (int j = 0; j < DECAY_MAX_FRAMES; j++)
+        if (j < frames) a += crt_decay_target(j, frames, lit_gain, floor_gain);
+    return a / float(frames);
+}
+
 // BFI Highlight Roll-off. Applies gain g to lin with a hue-preserving
 // shoulder: the whole RGB vector is scaled by one factor driven by its
 // maximum channel, so the brightest channel approaches the panel ceiling P
@@ -6361,6 +6677,19 @@ void crt_decay_PS(
         return;
     }
 
+    // Hitch Guard (1.6.0): BFI paused -- every frame at the strobe's average
+    // brightness, so a held lit or dark frame can't flash. Fibonacci passes
+    // through.
+    bool  paused  = crt_decay_hitch_paused();
+    // LCD phase swap fade (1.6.0): 0 = full strobe, 1 = steady picture.
+    float lcd_fade = tex2Dfetch(crt_decay_guard_sampler, int2(2, 0)).y;
+
+    if (crt_decay_method == 0 && (paused || lcd_fade >= 1.0))
+    {
+        color = float4(crt_decay_passthrough(c), 1.0);
+        return;
+    }
+
     if (crt_decay_method == 0)
     {
         // ====================================================
@@ -6416,13 +6745,13 @@ void crt_decay_PS(
 
     #if PIPELINE == 0
         // Encoded-domain multiply -- unchanged from 1.2.x.
-        color = float4(c * factor * trail_tint, 1.0);
+        color = float4(lerp(c * factor * trail_tint, c, lcd_fade), 1.0);
     #else
         // The same encoded-domain darkening, expressed in display light. Up
         // to 1.2.3 this scaled the Reinhard-compressed value, which darkened
         // highlights ~3x harder than midtones on every decay frame.
         float3 lin_f = crt_decay_decode(c);
-        color = float4(crt_decay_output(lin_f * pow(max(factor * trail_tint, 0.0), kDecayGamma)), 1.0);
+        color = float4(crt_decay_output(lin_f * lerp(pow(max(factor * trail_tint, 0.0), kDecayGamma), 1.0, lcd_fade)), 1.0);
     #endif
         return;
     }
@@ -6436,9 +6765,23 @@ void crt_decay_PS(
     bool   inv      = crt_decay_invert_cycle && frames > 2;
     // Inverted cycle: frames-1 lit sub-frames share the light, so each one
     // carries frames x gain / (frames - 1).
-    float  lit_gain = inv ? float(frames) * crt_decay_gain / float(frames - 1)
-                          : float(frames) * crt_decay_gain;
+    float  lit_gain = crt_decay_lit_gain(frames);
     bool   is_lit   = inv ? (frame_in_cycle != 0) : (frame_in_cycle == 0);
+
+    if (paused)
+    {
+        color = float4(crt_decay_output(lin * crt_decay_avg_gain(frames, lit_gain, fl)), 1.0);
+        return;
+    }
+#if CRT_DECAY_ABL
+    // ABL Guard: the lit-frame ceiling it settled on (10-nit steps).
+    if (crt_decay_abl_guard)
+    {
+        float abl_nits = tex2Dfetch(crt_decay_guard_sampler, int2(0, 0)).z;
+        if (abl_nits > 0.0)
+            ceil_lin = min(ceil_lin, floor(abl_nits / 10.0 + 0.5) * 10.0 / crt_decay_nits_per_unit());
+    }
+#endif
 
     // Square-wave dark sub-frames may show a 50/50 blend of the previous and
     // current frame (Dark Frame Blend). The floor scales whichever source --
@@ -6473,8 +6816,36 @@ void crt_decay_PS(
         }
     }
 
+    // LCD phase swap fade: toward the steady average picture, which keeps
+    // every cycle's light the same.
+    if (lcd_fade > 0.0)
+        out_lin = lerp(out_lin, lin * crt_decay_avg_gain(frames, lit_gain, fl), lcd_fade);
+
     color = float4(crt_decay_output(out_lin), 1.0);
 }
+
+#if DECAY_STATUS_SQUARE
+// Status square (DECAY_STATUS_SQUARE=1), drawn last: green = strobing,
+// amber = paused by the Hitch Guard, red = the game is not running at the
+// Display Refresh Rate (average frame time more than 10% off).
+void crt_decay_status_PS(
+    in  float4 position : SV_Position,
+    in  float2 texcoord : TEXCOORD0,
+    out float4 color    : SV_Target)
+{
+    if (position.x >= 24.0 || position.y >= 24.0)
+        discard;
+    float4 st = tex2Dfetch(crt_decay_guard_sampler, int2(0, 0));
+    float  P  = 1000.0 / max(crt_decay_refresh_hz, 1.0);
+    float3 col = (abs(st.y - P) > 0.1 * P) ? float3(1.0, 0.1, 0.1)
+               : crt_decay_hitch_paused()  ? float3(1.0, 0.7, 0.0)
+               :                             float3(0.1, 1.0, 0.2);
+#if PIPELINE >= 1 || LINEAR_HDR_INPUT
+    col *= 2.5;   // ~200 nits
+#endif
+    color = float4(crt_decay_output(col / ((PIPELINE >= 1 || LINEAR_HDR_INPUT) ? crt_decay_nits_per_unit() / 80.0 : 1.0)), 1.0);
+}
+#endif
 
 #endif
 // ============================================================
@@ -7383,6 +7754,29 @@ technique CRT_Standalone <
     }
     #endif
     #if ENABLE_DECAY
+    #if CRT_DECAY_ABL
+    // ABL Guard: lit-frame light per cell, from the decay pass's input.
+    pass PhosphorDecayABLCells
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_cells_PS;
+        RenderTarget = crt_decay_cells_tex;
+    }
+    #endif
+    // Hitch Guard / ABL Guard / LCD phase swap state (three 1-texel outputs),
+    // then kept for the next frame.
+    pass PhosphorDecayGuard
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_guard_PS;
+        RenderTarget = crt_decay_guard_tex;
+    }
+    pass PhosphorDecayGuardKeep
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_guard_copy_PS;
+        RenderTarget = crt_decay_guard_prev_tex;
+    }
     // Phase first: the history stores and the decay pass both read it.
     pass PhosphorDecayPhaseStore
     {
@@ -7551,6 +7945,13 @@ technique CRT_Standalone <
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_decay_fgdebug_PS;
+    }
+    #endif
+    #if ENABLE_DECAY && DECAY_STATUS_SQUARE
+    pass DecayStatus
+    {
+        VertexShader = PostProcessVS;
+        PixelShader  = crt_decay_status_PS;
     }
     #endif
 }

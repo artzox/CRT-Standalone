@@ -1,7 +1,7 @@
 #include "ReShade.fxh"
 
 /*
-    CRT-Standalone.fx  --  v1.6.0
+    CRT-Standalone.fx  --  v1.6.1
     Self-contained CRT shader. Features:
     - Pre-blur (H+V) before mask/scanlines, matching Guest Advanced SIZEH/SIZEV
     - Aperture grille mask (resolution-aware, anti-aliased)
@@ -248,6 +248,21 @@
 // Phosphor persistence simulation (within-frame asymmetric vertical blur)
 #ifndef ENABLE_PERSISTENCE
     #define ENABLE_PERSISTENCE 1
+#endif
+
+// BFI Presenter hand-off (1.6.1; BFI Presenter 1.0.49 or later, Direct3D 12): the mask, scanlines and what follows them in the main pass (spot size, beam
+// bloom, re-encode, brightboost, vignette, corner shadow, halation and glow added) are drawn by BFI Presenter instead,
+// after its frame warp, so a moved frame no longer moves the mask and scanlines with the picture (moire, mostly in the
+// sky). The shader then stops its main pass before the CRT gamma decode, and BFI Presenter reads this shader's settings
+// and its halation and glow textures and draws the rest. Turn on "Apply CRT-Standalone after frame warp" in BFI
+// Presenter as well -- with only this on, the picture has no mask or scanlines. Not with PIPELINE 1/2 or
+// ENABLE_SCANLINE_SS=1 yet. The passes after the main pass that work on the patterned picture -- sharpen, scanline
+// soften, grain, noise floor, gamut expand, corner round -- are drawn by BFI Presenter too, after the pattern (BFI
+// Presenter 1.0.49); persistence, motion sharpen, edge blur, screen reflect, tube diffuse, interference and light warp
+// still run here, on the picture before the pattern. Not with ENABLE_DECAY=1 (BFI Presenter strobes the picture itself).
+// 0 = off (default), 1 = on
+#ifndef BFI_PRESENTER_HANDOFF
+    #define BFI_PRESENTER_HANDOFF 0
 #endif
 
 // Fibonacci-weighted exponential phosphor decay (BFI-style motion clarity)
@@ -4857,6 +4872,9 @@ void crt_main_PS(
         #endif
     }
 
+    // With BFI_PRESENTER_HANDOFF, BFI Presenter draws from here on (after frame warp): the main pass ends with the
+    // picture as it is now, before the gamma decode.
+    #if !BFI_PRESENTER_HANDOFF
     // -- CRT gamma decode --
     float3 c_lin = crt_to_linear(c);
     // Source colour and luma stored before any CRT processing.
@@ -5295,6 +5313,7 @@ void crt_main_PS(
         }
     }
     #endif // ENABLE_GLOW
+    #endif // !BFI_PRESENTER_HANDOFF
 
     color = float4(c, 1.0);
 }
@@ -7696,14 +7715,14 @@ technique CRT_Standalone <
         VertexShader = PostProcessVS;
         PixelShader  = crt_main_PS;
     }
-    #if ENABLE_SHARPEN
+    #if ENABLE_SHARPEN && !BFI_PRESENTER_HANDOFF   // with the hand-off: drawn by BFI Presenter after the pattern
     pass Sharpen
     {
         VertexShader = PostProcessVS;
         PixelShader  = crt_sharpen_PS;
     }
     #endif
-    #if ENABLE_SCANLINE_SOFTEN
+    #if ENABLE_SCANLINE_SOFTEN && !BFI_PRESENTER_HANDOFF   // with the hand-off: drawn by BFI Presenter after the pattern
     pass ScanlineSoften
     {
         VertexShader = PostProcessVS;
@@ -7732,7 +7751,7 @@ technique CRT_Standalone <
         PixelShader  = crt_edge_blur_PS;
     }
     #endif
-    #if ENABLE_GRAIN
+    #if ENABLE_GRAIN && !BFI_PRESENTER_HANDOFF   // with the hand-off: drawn by BFI Presenter after the pattern
     pass GrainMerged
     {
         // Grain delta only -- the clean image stays in the back buffer
@@ -7746,7 +7765,7 @@ technique CRT_Standalone <
         PixelShader  = crt_grain_diffuse_PS;
     }
     #endif // ENABLE_GRAIN
-    #if ENABLE_NOISE_FLOOR
+    #if ENABLE_NOISE_FLOOR && !BFI_PRESENTER_HANDOFF   // with the hand-off: drawn by BFI Presenter after the pattern
     pass NoiseFloor
     {
         VertexShader = PostProcessVS;
@@ -7890,7 +7909,7 @@ technique CRT_Standalone <
         PixelShader  = crt_soop_after_PS;
     }
     #endif
-    #if ENABLE_GAMUT_EXPAND
+    #if ENABLE_GAMUT_EXPAND && !BFI_PRESENTER_HANDOFF   // with the hand-off: drawn by BFI Presenter after the pattern
     pass GamutExpand
     {
         VertexShader = PostProcessVS;
@@ -7932,7 +7951,7 @@ technique CRT_Standalone <
     }
     #endif
 
-    #if ENABLE_CORNER_ROUND
+    #if ENABLE_CORNER_ROUND && !BFI_PRESENTER_HANDOFF   // with the hand-off: drawn by BFI Presenter after the pattern
     pass CornerRound
     {
         VertexShader = PostProcessVS;

@@ -8,6 +8,16 @@ Versioning follows [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH
 
 ---
 
+## [1.6.1] — 2026-11
+
+The hand-off to [BFI Presenter](https://github.com/artzox/BFI-Presenter) 1.0.49: off by default, so existing presets are unchanged.
+
+### New Features
+
+- **`BFI_PRESENTER_HANDOFF`** (default 0) — with 1, the main pass stops before the CRT gamma decode and BFI Presenter (option **Apply CRT-Standalone after frame warp**) draws the rest after its frame warp, on the screen's own pixels: mask, scanlines, beam modulation, spot size, beam bloom, brightboost, vignette, corner shadow, halation and glow, then Sharpen, Post-Scanline Softening, Film Grain, Noise Floor, Gamut Expansion and Corner Rounding. A filled flash then moves the picture but not the mask and scanlines, so they no longer break up into moiré where parts of the picture move by different amounts. Settings stay in the shader's window. Those passes leave ReShade's technique while it is on; Pre-Blur, Persistence, Motion Sharpening, Edge Blur, Screen Reflection, Tube Diffuse, Interference and Light Warp still run there. Direct3D 12, 64-bit, `PIPELINE=0`, `ENABLE_SCANLINE_SS=0`
+
+---
+
 ## [1.6.0] — 2026-10
 
 The guards of the [BFI Presenter](https://github.com/artzox/BFI-Presenter) shader, ported to the decay pass. All off by default: existing presets are unchanged. (1.5.x were unreleased Hitch Softening test builds, dropped.)

@@ -1,6 +1,6 @@
 # CRT-Standalone Shader — User Guide
 
-**Version 1.6.0** — see [CHANGELOG.md](CHANGELOG.md) for what changed.
+**Version 1.6.1** — see [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/artzox)
 
@@ -26,6 +26,7 @@ Set these in the ReShade **Preprocessor Definitions** panel (not the sliders):
 | `ENABLE_DECAY` | **1** to enable phosphor persistence / BFI system |
 | `ENABLE_BEAM_MODULATION` | **1** for luminance-dependent beam width |
 | `SCANLINE_REFERENCE_HEIGHT` | Set to your display height (e.g. **2160** for 4K, **2880** for 5K) for resolution-independent scanline width |
+| `BFI_PRESENTER_HANDOFF` | **1** to let [BFI Presenter](https://github.com/artzox/BFI-Presenter) draw the mask and scanlines after its frame warp (see [BFI Presenter Hand-off](#bfi-presenter-hand-off-161)) |
 
 ### Recommended Starting Points
 
@@ -108,6 +109,7 @@ Set these in the ReShade overlay under **Preprocessor Definitions** to enable/di
 | `ENABLE_GAMUT_EXPAND` | 0 | Gamut expansion — Rec.709 chrominance → Rec.2020 within existing HDR container |
 | `ENABLE_SCANLINE_SS` | 0 | Rotated-grid 4× scanline supersampling — diagonal aliasing mitigation, with optional structure-tensor edge gating |
 | `ENABLE_BEAM_H` | 0 | Horizontal beam reconstruction — analytic horizontal spot profile, complement to the vertical scanline beam |
+| `BFI_PRESENTER_HANDOFF` | 0 | 1 = the mask, scanlines and the passes after them are drawn by BFI Presenter after its frame warp (1.6.1; see [BFI Presenter Hand-off](#bfi-presenter-hand-off-161)). Without BFI Presenter's matching option the picture has no mask or scanlines |
 
 ### Resolution / Quality Defines
 
@@ -537,6 +539,24 @@ Gain is applied to the light the panel will emit, on every pipeline: the sRGB EO
 **BFI Auto-Resync** — monitors average luminance of lit vs dark frames. If dark frames become unexpectedly bright (phase flip), automatically corrects by 1 frame. May not reliably detect desync in all cases. If you never use it, `DECAY_AUTO_RESYNC=0` removes its passes and one full back-buffer copy per frame. Don't use it with frame generation: it judges lit and dark frames by the phase it is correcting, so after a flip it can switch back and forth.
 
 **Frame Gen Phase Flip** — for DLSS Frame Generation. With 2-frame BFI, FRAMECOUNT naturally alternates real/generated frames between lit and dark phases. If real frames land on the dark phase (image looks dimmer than expected), enable this to flip.
+
+### BFI Presenter Hand-off (1.6.1)
+
+For use with [BFI Presenter](https://github.com/artzox/BFI-Presenter) 1.0.49 or later and its **frame warp**. Frame warp fills a strobe cycle the game missed by showing the last frame moved along the camera's motion. When CRT-Standalone runs in ReShade, the mask and scanlines are already part of that frame, so they are moved with it: where parts of the picture move by different amounts (a sky in a camera turn), the mask and scanlines break up into moiré on the filled flashes.
+
+With the hand-off, CRT-Standalone stops its main pass before the CRT gamma decode, and BFI Presenter draws the rest *after* frame warp, on the screen's own pixels: the mask, scanlines, beam modulation, spot size, beam bloom, brightboost, vignette, corner shadow, halation and glow, and then the passes that work on the patterned picture: **Sharpen**, **Post-Scanline Softening**, **Film Grain**, **Noise Floor**, **Gamut Expansion** and **Corner Rounding**. The picture moves; the mask and scanlines stay where they are. All settings stay in CRT-Standalone's own window, and BFI Presenter reads them every frame (with ReShade's performance mode as well, from the preset).
+
+To use it:
+1. Set `BFI_PRESENTER_HANDOFF=1` in the preprocessor definitions
+2. In BFI Presenter's settings, under Frame pacing and latency, tick **Apply CRT-Standalone after frame warp**. Its status reads *(in use)* when both are on
+
+Notes:
+- Direct3D 12, 64-bit games, `PIPELINE=0`, `ENABLE_SCANLINE_SS=0` for now. With `PIPELINE=1/2` or `ENABLE_SCANLINE_SS=1` BFI Presenter reports the setup as not supported and leaves the shader alone
+- Leave `ENABLE_DECAY=0`: BFI Presenter strobes the picture itself
+- Pre-Blur, Persistence, Motion Sharpening, Edge Blur, Screen Reflection, Tube Diffuse, Interference and Light Warp still run in ReShade, on the picture before the mask and scanlines
+- Turning on `BFI_PRESENTER_HANDOFF=1` without BFI Presenter's option shows the picture without mask and scanlines
+- BFI Presenter's **Snap** settings aren't needed with the hand-off and are ignored while it is in use
+- Scanline Width is rounded to whole pixels (2.5 rounds to 2, 2.8 to 3)
 
 ### Hitch Guard, LCD and ABL Guard (1.6.0)
 
